@@ -20,6 +20,14 @@ export interface QualityLevel {
   bitrate: number;
 }
 
+const formatBitrate = (bitrate: number): string => {
+  if (!bitrate) return '';
+  if (bitrate > 1000000) {
+    return `${(bitrate / 1000000).toFixed(1)} Mbps`;
+  }
+  return `${Math.round(bitrate / 1000)} kbps`;
+};
+
 const SettingsIcon: React.FC<{ className?: string }> = ({ className }) => (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
         <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.43.992a6.759 6.759 0 0 1 0 1.844c.008.378.137.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.513 6.513 0 0 1-.22.128c-.333.183-.582.495-.644.869l-.213 1.28c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.063-.374-.313-.686-.645-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.075-.124l-1.217.456a1.125 1.125 0 0 1-1.37-.49l-1.296-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.759 6.759 0 0 1 0-1.844c-.008-.378-.137-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.298-2.247a1.125 1.125 0 0 1 1.37-.491l1.217.456c.355.133.75.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.213-1.28Z" />
@@ -43,12 +51,16 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<any>(null);
+  const controlsTimeoutRef = useRef<number | null>(null);
+
 
   // State for quality selection
   const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
   const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1); // -1 for Auto
-  const [activeQualityHeight, setActiveQualityHeight] = useState<number | null>(null);
+  const [activeQualityInfo, setActiveQualityInfo] = useState<QualityLevel | null>(null);
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
+  const [controlsVisible, setControlsVisible] = useState(false);
+
 
   // State for panning and zooming
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -59,13 +71,30 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
   // State for fullscreen
   const [isFullscreen, setIsFullscreen] = useState(false);
 
+  const hideControls = useCallback(() => {
+    if (isQualityMenuOpen) return;
+    setControlsVisible(false);
+  }, [isQualityMenuOpen]);
+
+  const showControls = useCallback(() => {
+      setControlsVisible(true);
+      if (controlsTimeoutRef.current) {
+          clearTimeout(controlsTimeoutRef.current);
+      }
+      controlsTimeoutRef.current = window.setTimeout(hideControls, 3000);
+  }, [hideControls]);
+
   useEffect(() => {
     const handleFullscreenChange = () => {
-      setIsFullscreen(!!document.fullscreenElement);
+      const isFs = !!document.fullscreenElement;
+      setIsFullscreen(isFs);
+      if (isFs) {
+        showControls();
+      }
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
     return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, []);
+  }, [showControls]);
 
   const updatePan = useCallback((newPan: {x: number, y: number}, currentZoom: number) => {
       if (!containerRef.current) return;
@@ -114,7 +143,12 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
             }
         });
         hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-            setActiveQualityHeight(hls.levels[data.level].height);
+            const levelInfo = hls.levels[data.level];
+            setActiveQualityInfo({
+                index: data.level,
+                height: levelInfo.height,
+                bitrate: levelInfo.bitrate
+            });
         });
       };
       
@@ -131,6 +165,9 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
+      }
+      if (controlsTimeoutRef.current) {
+          clearTimeout(controlsTimeoutRef.current);
       }
     };
   }, [src, refreshKey]);
@@ -175,30 +212,56 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
   
   const getQualityLabel = () => {
     if (selectedQualityIndex === -1) {
-        return `Auto ${activeQualityHeight ? `(${activeQualityHeight}p)` : ''}`;
+        return `Auto ${activeQualityInfo ? `(${activeQualityInfo.height}p, ${formatBitrate(activeQualityInfo.bitrate)})` : ''}`;
     }
     const selectedLevel = qualityLevels.find(l => l.index === selectedQualityIndex);
     return selectedLevel ? `${selectedLevel.height}p` : '...';
   }
+  
+  const toggleControls = (e: React.MouseEvent | React.TouchEvent) => {
+     // Only toggle if the click is on the container itself, not on children like controls
+    if (e.target !== e.currentTarget) return;
+
+    if (controlsVisible) {
+        if (controlsTimeoutRef.current) clearTimeout(controlsTimeoutRef.current);
+        hideControls();
+    } else {
+        showControls();
+    }
+  };
 
   const cursorClass = isPanning ? 'cursor-grabbing' : zoomLevel > 1 ? 'cursor-grab' : 'cursor-pointer';
 
   return (
     <div 
         ref={containerRef}
-        className={`relative w-full aspect-video bg-black flex items-center justify-center touch-none group ${cursorClass}`}
+        className={`relative w-full aspect-video bg-black flex items-center justify-center touch-none ${cursorClass}`}
         onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
-        onMouseMove={(e) => handlePanMove(e.clientX, e.clientY)}
+        onMouseMove={(e) => {
+          handlePanMove(e.clientX, e.clientY);
+          showControls();
+        }}
         onMouseUp={handlePanEnd}
-        onMouseLeave={handlePanEnd}
+        onMouseLeave={() => {
+          handlePanEnd();
+          hideControls();
+        }}
         onWheel={handleWheel}
         onTouchStart={(e) => {
           if (e.touches.length === 1) handlePanStart(e.touches[0].clientX, e.touches[0].clientY);
+          showControls();
         }}
         onTouchMove={(e) => {
           if (e.touches.length === 1) handlePanMove(e.touches[0].clientX, e.touches[0].clientY);
         }}
         onTouchEnd={handlePanEnd}
+        onClick={(e) => {
+           if (videoRef.current && e.target === videoRef.current) {
+               if(videoRef.current.paused) videoRef.current.play();
+               else videoRef.current.pause();
+               toggleControls(e);
+           }
+        }}
     >
       <video
         ref={videoRef}
@@ -209,15 +272,13 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
           transformOrigin: transformOrigin,
           transition: isPanning ? 'none' : 'transform 0.1s ease-out'
         }}
-        onClick={(e) => {
-           if (videoRef.current) {
-               if(videoRef.current.paused) videoRef.current.play();
-               else videoRef.current.pause();
-           }
-        }}
       />
 
-      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+      <div 
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 transition-opacity duration-300 pointer-events-none ${controlsVisible ? 'opacity-100' : 'opacity-0'}`}
+        onMouseMove={(e) => e.stopPropagation()}
+        onClick={(e) => e.stopPropagation()}
+       >
          <div className="flex items-center justify-end gap-3 pointer-events-auto">
             <div className="relative flex items-center gap-2">
                 <span className="text-sm font-semibold">{getQualityLabel()}</span>

@@ -8,12 +8,19 @@ interface QualitySelectorProps {
   onQualityChange: (levelIndex: number) => void;
 }
 
+const formatBitrate = (bitrate: number): string => {
+  if (bitrate > 1000000) {
+    return `${(bitrate / 1000000).toFixed(1)} Mbps`;
+  }
+  return `${Math.round(bitrate / 1000)} kbps`;
+};
+
 const QualitySelector: React.FC<QualitySelectorProps> = ({ levels, currentLevelIndex, onQualityChange }) => {
 
-  const getQualityLabel = (level: QualityLevel) => `${level.height}p`;
+  const getQualityLabel = (level: QualityLevel) => `${level.height}p (${formatBitrate(level.bitrate)})`;
 
   return (
-    <ul className="absolute bottom-full right-0 mb-2 w-32 bg-gray-700/90 border border-gray-600 rounded-lg shadow-xl overflow-hidden z-10 animate-fade-in-up backdrop-blur-sm">
+    <ul className="absolute bottom-full right-0 mb-2 w-40 bg-gray-700/90 border border-gray-600 rounded-lg shadow-xl overflow-hidden z-10 animate-fade-in-up backdrop-blur-sm">
         <li>
         <button 
             onClick={() => onQualityChange(-1)} 
