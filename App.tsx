@@ -40,7 +40,7 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
       <div className="w-full max-w-4xl mx-auto flex flex-col gap-6">
         <header className="text-center">
-          <h1 className="text-3xl md:text-4xl font-bold text-cyan-400">Live Stream Player</h1>
+          <h1 className="text-3xl md:text-4xl font-bold text-cyan-400">Přehrávač živého vysílání</h1>
           <p className="text-gray-400 mt-2">Parlament České republiky - Live</p>
         </header>
         

@@ -275,9 +275,11 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       />
 
       <div 
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 transition-opacity duration-300 pointer-events-none ${controlsVisible ? 'opacity-100' : 'opacity-0'}`}
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 transition-opacity duration-300 pointer-events-none z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'}`}
         onMouseMove={(e) => e.stopPropagation()}
         onClick={(e) => e.stopPropagation()}
+        onMouseDown={(e) => e.stopPropagation()}
+        onTouchStart={(e) => e.stopPropagation()}
        >
          <div className="flex items-center justify-end gap-3 pointer-events-auto">
             <div className="relative flex items-center gap-2">
