@@ -1,7 +1,6 @@
 
 import React, { useState, useCallback, useRef } from 'react';
 import VideoPlayer from './components/VideoPlayer';
-import ZoomControls from './components/ZoomControls';
 
 const STREAM_URL = "https://pspcr-ott-live.ssl.cdn.cra.cz/channels/ps-stream1/playlist/cze.m3u8";
 
@@ -52,18 +51,11 @@ const App: React.FC = () => {
             refreshKey={refreshKey}
             onToggleFullscreen={handleToggleFullscreen}
             onRefresh={handleRefresh}
-          />
-        </main>
-
-        <footer className="w-full flex items-center justify-center">
-          <ZoomControls 
-            zoomLevel={zoomLevel}
-            onZoomChange={handleZoomChange}
             minZoom={MIN_ZOOM}
             maxZoom={MAX_ZOOM}
             step={ZOOM_STEP}
           />
-        </footer>
+        </main>
       </div>
     </div>
   );

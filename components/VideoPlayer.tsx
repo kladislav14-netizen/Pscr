@@ -12,6 +12,9 @@ interface VideoPlayerProps {
   refreshKey: number;
   onToggleFullscreen: () => void;
   onRefresh: () => void;
+  minZoom: number;
+  maxZoom: number;
+  step: number;
 }
 
 // Define a type for HLS quality levels for better type safety
@@ -80,9 +83,21 @@ const FullscreenExitIcon: React.FC<{ className?: string }> = ({ className }) => 
     </svg>
 );
 
+const MinusIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+    </svg>
+);
+
+const PlusIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+    </svg>
+);
+
 // --- Component ---
 
-const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLevel, onZoomChange, refreshKey, onToggleFullscreen, onRefresh }, ref) => {
+const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLevel, onZoomChange, refreshKey, onToggleFullscreen, onRefresh, minZoom, maxZoom, step }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<any>(null);
@@ -108,6 +123,9 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
 
   // Fullscreen state
   const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  const handleZoomIn = useCallback(() => onZoomChange(zoomLevel + step), [zoomLevel, step, onZoomChange]);
+  const handleZoomOut = useCallback(() => onZoomChange(zoomLevel - step), [zoomLevel, step, onZoomChange]);
 
   const hideControls = useCallback(() => {
     if (isQualityMenuOpen) return;
@@ -336,7 +354,7 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       />
 
       <div 
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
+        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
        >
          <div className="flex items-center justify-between gap-3 pointer-events-auto">
             {/* Left Controls */}
@@ -363,7 +381,39 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
             
             {/* Right Controls */}
             <div className="flex items-center gap-3">
-                <span className="text-sm font-semibold">{getQualityLabel()}</span>
+                {/* ZOOM CONTROLS - hidden on small screens */}
+                <div className="hidden md:flex items-center gap-2">
+                     <button
+                        onClick={handleZoomOut}
+                        disabled={zoomLevel <= minZoom}
+                        className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        aria-label="Oddálit"
+                    >
+                        <MinusIcon className="w-6 h-6" />
+                    </button>
+                     <input
+                        type="range"
+                        min={minZoom}
+                        max={maxZoom}
+                        step={step}
+                        value={zoomLevel}
+                        onChange={(e) => onZoomChange(parseFloat(e.target.value))}
+                        className="w-20 h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-400"
+                        aria-label="Posuvník přiblížení"
+                        />
+                    <button
+                        onClick={handleZoomIn}
+                        disabled={zoomLevel >= maxZoom}
+                        className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                        aria-label="Přiblížit"
+                    >
+                        <PlusIcon className="w-6 h-6" />
+                    </button>
+                    <span className="font-mono text-sm text-cyan-300 w-14 text-center">{zoomLevel.toFixed(1)}x</span>
+                </div>
+                {/* END ZOOM CONTROLS */}
+
+                <span className="text-sm font-semibold hidden lg:block">{getQualityLabel()}</span>
                 <div className="relative">
                     <button
                         onClick={() => setIsQualityMenuOpen(prev => !prev)}
