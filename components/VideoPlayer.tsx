@@ -353,7 +353,7 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       />
 
       <div 
-        className={`absolute bottom-6 inset-x-4 bg-black/60 backdrop-blur-md rounded-xl p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
+        className={`absolute bottom-8 inset-x-4 bg-black/60 backdrop-blur-md rounded-xl p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
        >
          <div className="flex items-center justify-between gap-3 pointer-events-auto">
             {/* Left Controls */}
