@@ -44,13 +44,13 @@ const App: React.FC = () => {
           <p className="text-gray-400 mt-2">Parlament České republiky - Live</p>
         </header>
         
-        <main className="bg-black rounded-lg shadow-2xl shadow-cyan-500/10 overflow-hidden">
+        <main ref={videoPlayerContainerRef} className="bg-black rounded-lg shadow-2xl shadow-cyan-500/10 overflow-hidden relative">
           <VideoPlayer 
-            ref={videoPlayerContainerRef}
             src={STREAM_URL} 
             zoomLevel={zoomLevel}
             onZoomChange={handleZoomChange}
             refreshKey={refreshKey}
+            onToggleFullscreen={handleToggleFullscreen}
           />
         </main>
 
@@ -62,7 +62,6 @@ const App: React.FC = () => {
             maxZoom={MAX_ZOOM}
             step={ZOOM_STEP}
             onRefresh={handleRefresh}
-            onToggleFullscreen={handleToggleFullscreen}
           />
         </footer>
       </div>

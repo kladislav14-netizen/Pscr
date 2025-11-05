@@ -1,5 +1,5 @@
 
-import React, { useRef, useEffect, useState, forwardRef } from 'react';
+import React, { useRef, useEffect, useState, forwardRef, useCallback } from 'react';
 import QualitySelector from './QualitySelector';
 
 // TypeScript declaration for Hls.js loaded from CDN
@@ -10,11 +10,14 @@ interface VideoPlayerProps {
   zoomLevel: number;
   onZoomChange: (newZoom: number) => void;
   refreshKey: number;
+  onToggleFullscreen: () => void;
 }
 
 // Define a type for HLS quality levels for better type safety
-interface HlsLevel {
+export interface QualityLevel {
+  index: number;
   height: number;
+  bitrate: number;
 }
 
 const SettingsIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -24,38 +27,72 @@ const SettingsIcon: React.FC<{ className?: string }> = ({ className }) => (
     </svg>
 );
 
+const FullscreenEnterIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+    </svg>
+);
 
-const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLevel, onZoomChange, refreshKey }, ref) => {
+const FullscreenExitIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5M15 15l5.25 5.25" />
+    </svg>
+);
+
+const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLevel, onZoomChange, refreshKey, onToggleFullscreen }, ref) => {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const hlsRef = useRef<any>(null);
-  
+
   // State for quality selection
-  const [qualityLevels, setQualityLevels] = useState<HlsLevel[]>([]);
-  const [currentQualityLevel, setCurrentQualityLevel] = useState<number>(-1); // -1 for Auto
+  const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
+  const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1); // -1 for Auto
+  const [activeQualityHeight, setActiveQualityHeight] = useState<number | null>(null);
   const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
 
-  // State for pinch-to-zoom
-  const pinchStartDistance = useRef<number | null>(null);
-  const lastZoomLevel = useRef<number>(zoomLevel);
-
-  // State for panning
+  // State for panning and zooming
   const [pan, setPan] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const panStartRef = useRef({ x: 0, y: 0 });
-  const lastPan = useRef({ x: 0, y: 0 });
+  const [transformOrigin, setTransformOrigin] = useState('50% 50%');
+
+  // State for fullscreen
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
-    lastZoomLevel.current = zoomLevel;
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const updatePan = useCallback((newPan: {x: number, y: number}, currentZoom: number) => {
+      if (!containerRef.current) return;
+      const rect = containerRef.current.getBoundingClientRect();
+      const maxPanX = (rect.width * currentZoom - rect.width) / 2 / currentZoom;
+      const maxPanY = (rect.height * currentZoom - rect.height) / 2 / currentZoom;
+      const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPan.x));
+      const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPan.y));
+      setPan({ x: clampedX, y: clampedY });
+  }, []);
+
+  useEffect(() => {
     if (zoomLevel <= 1) {
       setPan({ x: 0, y: 0 });
+    } else {
+       updatePan(pan, zoomLevel);
     }
-  }, [zoomLevel]);
+  }, [zoomLevel, updatePan, pan]);
 
   useEffect(() => {
     if (videoRef.current) {
       const videoElement = videoRef.current;
 
-      if (Hls.isSupported()) {
+      const setupHls = () => {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+        }
         const hls = new Hls();
         hlsRef.current = hls;
         hls.loadSource(src);
@@ -65,11 +102,24 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
         });
         hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
             if (data.levels) {
-                // Filter out levels with 0 height (often audio-only tracks)
-                const videoLevels = data.levels.filter((level: HlsLevel) => level.height > 0);
+                const videoLevels: QualityLevel[] = data.levels
+                  .map((level: any, index: number) => ({
+                    index: index,
+                    height: level.height,
+                    bitrate: level.bitrate,
+                  }))
+                  .filter((level: QualityLevel) => level.height > 0)
+                  .sort((a: QualityLevel, b: QualityLevel) => b.height - a.height);
                 setQualityLevels(videoLevels);
             }
         });
+        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+            setActiveQualityHeight(hls.levels[data.level].height);
+        });
+      };
+      
+      if (Hls.isSupported()) {
+        setupHls();
       } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
         videoElement.src = src;
         videoElement.addEventListener('loadedmetadata', () => {
@@ -86,124 +136,116 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
   }, [src, refreshKey]);
 
   useEffect(() => {
-      if (hlsRef.current && hlsRef.current.currentLevel !== currentQualityLevel) {
-          hlsRef.current.currentLevel = currentQualityLevel;
+      if (hlsRef.current) {
+          hlsRef.current.currentLevel = selectedQualityIndex;
       }
-  }, [currentQualityLevel]);
+  }, [selectedQualityIndex]);
 
-  const getDistance = (touches: React.TouchList): number => {
-    const [touch1, touch2] = [touches[0], touches[1]];
-    return Math.sqrt(Math.pow(touch2.clientX - touch1.clientX, 2) + Math.pow(touch2.clientY - touch1.clientY, 2));
-  };
 
   const handlePanStart = (clientX: number, clientY: number) => {
       if (zoomLevel <= 1) return;
       setIsPanning(true);
-      panStartRef.current = { x: clientX, y: clientY };
-      lastPan.current = pan;
+      panStartRef.current = { x: clientX - pan.x * zoomLevel, y: clientY - pan.y * zoomLevel };
   };
 
   const handlePanMove = (clientX: number, clientY: number) => {
-      if (!isPanning || !videoRef.current) return;
-      const dx = clientX - panStartRef.current.x;
-      const dy = clientY - panStartRef.current.y;
-      const newPan = { x: lastPan.current.x + dx, y: lastPan.current.y + dy };
-      const rect = videoRef.current.getBoundingClientRect();
-      const maxPanX = (rect.width * zoomLevel - rect.width) / 2;
-      const maxPanY = (rect.height * zoomLevel - rect.height) / 2;
-      const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPan.x));
-      const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPan.y));
-      setPan({ x: clampedX, y: clampedY });
+      if (!isPanning) return;
+      const newPan = {
+          x: (clientX - panStartRef.current.x) / zoomLevel,
+          y: (clientY - panStartRef.current.y) / zoomLevel
+      };
+      updatePan(newPan, zoomLevel);
   };
 
   const handlePanEnd = () => setIsPanning(false);
 
-  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('.video-controls')) return;
+  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
     e.preventDefault();
-    handlePanStart(e.clientX, e.clientY);
-  };
-  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (isPanning) handlePanMove(e.clientX, e.clientY);
-  };
+    if (!containerRef.current) return;
 
-  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('.video-controls')) return;
-    if (e.touches.length === 1 && zoomLevel > 1) {
-      e.preventDefault();
-      handlePanStart(e.touches[0].clientX, e.touches[0].clientY);
-    } else if (e.touches.length === 2) {
-      e.preventDefault();
-      pinchStartDistance.current = getDistance(e.touches);
-      lastZoomLevel.current = zoomLevel;
-    }
-  };
-
-  const handleTouchMove = (e: React.TouchEvent<HTMLDivElement>) => {
-    if ((e.target as HTMLElement).closest('.video-controls')) return;
-    if (e.touches.length === 1 && isPanning) {
-      e.preventDefault();
-      handlePanMove(e.touches[0].clientX, e.touches[0].clientY);
-    } else if (e.touches.length === 2 && pinchStartDistance.current !== null) {
-      e.preventDefault();
-      const newDistance = getDistance(e.touches);
-      const scale = newDistance / pinchStartDistance.current;
-      onZoomChange(lastZoomLevel.current * scale);
-    }
-  };
-  
-  const handleTouchEnd = () => {
-    pinchStartDistance.current = null;
-    handlePanEnd();
+    const rect = containerRef.current.getBoundingClientRect();
+    const newZoom = Math.max(1, zoomLevel - e.deltaY * 0.005);
+    onZoomChange(newZoom);
   };
 
   const handleQualityChange = (levelIndex: number) => {
-      setCurrentQualityLevel(levelIndex);
+      setSelectedQualityIndex(levelIndex);
       setIsQualityMenuOpen(false);
   };
+  
+  const getQualityLabel = () => {
+    if (selectedQualityIndex === -1) {
+        return `Auto ${activeQualityHeight ? `(${activeQualityHeight}p)` : ''}`;
+    }
+    const selectedLevel = qualityLevels.find(l => l.index === selectedQualityIndex);
+    return selectedLevel ? `${selectedLevel.height}p` : '...';
+  }
 
-  const cursorClass = isPanning ? 'cursor-grabbing' : zoomLevel > 1 ? 'cursor-grab' : 'cursor-auto';
+  const cursorClass = isPanning ? 'cursor-grabbing' : zoomLevel > 1 ? 'cursor-grab' : 'cursor-pointer';
 
   return (
     <div 
-        ref={ref}
-        className={`relative w-full aspect-video bg-black overflow-hidden flex items-center justify-center touch-none ${cursorClass}`}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
+        ref={containerRef}
+        className={`relative w-full aspect-video bg-black flex items-center justify-center touch-none group ${cursorClass}`}
+        onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
+        onMouseMove={(e) => handlePanMove(e.clientX, e.clientY)}
         onMouseUp={handlePanEnd}
         onMouseLeave={handlePanEnd}
-        onTouchStart={handleTouchStart}
-        onTouchMove={handleTouchMove}
-        onTouchEnd={handleTouchEnd}
+        onWheel={handleWheel}
+        onTouchStart={(e) => {
+          if (e.touches.length === 1) handlePanStart(e.touches[0].clientX, e.touches[0].clientY);
+        }}
+        onTouchMove={(e) => {
+          if (e.touches.length === 1) handlePanMove(e.touches[0].clientX, e.touches[0].clientY);
+        }}
+        onTouchEnd={handlePanEnd}
     >
       <video
         ref={videoRef}
-        controls
         playsInline
-        className="w-full h-full object-cover transition-transform duration-100 ease-out"
-        style={{ transform: `scale(${zoomLevel}) translateX(${pan.x}px) translateY(${pan.y}px)` }}
+        className="w-full h-full object-contain"
+        style={{ 
+          transform: `scale(${zoomLevel}) translateX(${pan.x}px) translateY(${pan.y}px)`, 
+          transformOrigin: transformOrigin,
+          transition: isPanning ? 'none' : 'transform 0.1s ease-out'
+        }}
+        onClick={(e) => {
+           if (videoRef.current) {
+               if(videoRef.current.paused) videoRef.current.play();
+               else videoRef.current.pause();
+           }
+        }}
       />
 
-      <div className="video-controls absolute bottom-2 right-2">
-         <div className="relative">
+      <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/60 to-transparent p-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 pointer-events-none">
+         <div className="flex items-center justify-end gap-3 pointer-events-auto">
+            <div className="relative flex items-center gap-2">
+                <span className="text-sm font-semibold">{getQualityLabel()}</span>
+                <button
+                    onClick={() => setIsQualityMenuOpen(prev => !prev)}
+                    disabled={qualityLevels.length === 0}
+                    className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                    aria-label="Nastavení kvality"
+                >
+                    <SettingsIcon className="w-6 h-6" />
+                </button>
+                {isQualityMenuOpen && (
+                    <QualitySelector
+                        levels={qualityLevels}
+                        currentLevelIndex={selectedQualityIndex}
+                        onQualityChange={handleQualityChange}
+                    />
+                )}
+            </div>
             <button
-                onClick={() => setIsQualityMenuOpen(prev => !prev)}
-                disabled={qualityLevels.length === 0}
-                className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                aria-label="Quality settings"
+              onClick={onToggleFullscreen}
+              className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 transition-colors"
+              aria-label="Celá obrazovka"
             >
-                <SettingsIcon className="w-6 h-6" />
+              {isFullscreen ? <FullscreenExitIcon className="w-6 h-6" /> : <FullscreenEnterIcon className="w-6 h-6" />}
             </button>
-            {isQualityMenuOpen && (
-                <QualitySelector
-                    levels={qualityLevels}
-                    currentLevel={currentQualityLevel}
-                    onQualityChange={handleQualityChange}
-                />
-            )}
          </div>
       </div>
-
     </div>
   );
 });
