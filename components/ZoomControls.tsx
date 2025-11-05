@@ -1,3 +1,4 @@
+
 import React from 'react';
 
 interface ZoomControlsProps {
@@ -7,6 +8,7 @@ interface ZoomControlsProps {
   maxZoom: number;
   step: number;
   onRefresh: () => void;
+  onToggleFullscreen: () => void;
 }
 
 const MinusIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -33,8 +35,13 @@ const RefreshIcon: React.FC<{ className?: string }> = ({ className }) => (
     </svg>
 );
 
+const FullscreenIcon: React.FC<{ className?: string }> = ({ className }) => (
+    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
+    </svg>
+);
 
-const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, minZoom, maxZoom, step, onRefresh }) => {
+const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, minZoom, maxZoom, step, onRefresh, onToggleFullscreen }) => {
   const handleZoomIn = () => onZoomChange(zoomLevel + step);
   const handleZoomOut = () => onZoomChange(zoomLevel - step);
   const handleResetZoom = () => onZoomChange(1);
@@ -86,6 +93,13 @@ const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, mi
         aria-label="Refresh stream"
       >
         <RefreshIcon className="w-6 h-6" />
+      </button>
+      <button
+        onClick={onToggleFullscreen}
+        className="p-2 rounded-full bg-gray-700 text-white hover:bg-cyan-500 transition-colors"
+        aria-label="Toggle fullscreen"
+      >
+        <FullscreenIcon className="w-6 h-6" />
       </button>
     </div>
   );

@@ -1,8 +1,7 @@
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import VideoPlayer from './components/VideoPlayer';
 import ZoomControls from './components/ZoomControls';
-import QualitySelector from './components/QualitySelector';
 
 const STREAM_URL = "https://pspcr-ott-live.ssl.cdn.cra.cz/channels/ps-stream1/playlist/cze.m3u8";
 
@@ -10,36 +9,32 @@ const MIN_ZOOM = 1;
 const MAX_ZOOM = 5;
 const ZOOM_STEP = 0.1;
 
-// Define a type for HLS quality levels for better type safety
-interface HlsLevel {
-  height: number;
-  // HLS.js provides more properties, but height is sufficient for our UI
-}
-
 const App: React.FC = () => {
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [refreshKey, setRefreshKey] = useState<number>(0);
-  const [qualityLevels, setQualityLevels] = useState<HlsLevel[]>([]);
-  const [currentQualityLevel, setCurrentQualityLevel] = useState<number>(-1); // -1 for Auto
+  const videoPlayerContainerRef = useRef<HTMLDivElement>(null);
 
   const handleZoomChange = useCallback((newZoom: number) => {
-    // Clamp the zoom level between min and max values
     setZoomLevel(Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, newZoom)));
   }, []);
 
   const handleRefresh = useCallback(() => {
-    // Incrementing the key will trigger a re-mount of the VideoPlayer's effect
     setRefreshKey(prevKey => prevKey + 1);
   }, []);
 
-  const handleLevelsAvailable = useCallback((levels: HlsLevel[]) => {
-    setQualityLevels(levels);
-  }, []);
+  const handleToggleFullscreen = useCallback(() => {
+    if (!videoPlayerContainerRef.current) return;
 
-  const handleQualityChange = useCallback((levelIndex: number) => {
-    setCurrentQualityLevel(levelIndex);
+    if (!document.fullscreenElement) {
+      videoPlayerContainerRef.current.requestFullscreen().catch(err => {
+        console.error(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
   }, []);
-
 
   return (
     <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
@@ -51,16 +46,15 @@ const App: React.FC = () => {
         
         <main className="bg-black rounded-lg shadow-2xl shadow-cyan-500/10 overflow-hidden">
           <VideoPlayer 
+            ref={videoPlayerContainerRef}
             src={STREAM_URL} 
             zoomLevel={zoomLevel}
             onZoomChange={handleZoomChange}
             refreshKey={refreshKey}
-            onLevelsAvailable={handleLevelsAvailable}
-            currentQualityLevel={currentQualityLevel}
           />
         </main>
 
-        <footer className="w-full flex flex-col lg:flex-row items-center justify-center gap-4">
+        <footer className="w-full flex items-center justify-center">
           <ZoomControls 
             zoomLevel={zoomLevel}
             onZoomChange={handleZoomChange}
@@ -68,11 +62,7 @@ const App: React.FC = () => {
             maxZoom={MAX_ZOOM}
             step={ZOOM_STEP}
             onRefresh={handleRefresh}
-          />
-          <QualitySelector
-            levels={qualityLevels}
-            currentLevel={currentQualityLevel}
-            onQualityChange={handleQualityChange}
+            onToggleFullscreen={handleToggleFullscreen}
           />
         </footer>
       </div>
