@@ -1,0 +1,5 @@
+{
+  "name": "Live Stream Zoom Player",
+  "description": "An application to watch an HLS live stream with zoom controls. It plays a specific Czech parliamentary channel and allows users to zoom in and out of the video feed.",
+  "requestFramePermissions": []
+}
