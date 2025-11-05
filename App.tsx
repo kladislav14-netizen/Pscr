@@ -36,14 +36,14 @@ const App: React.FC = () => {
   }, []);
 
   return (
-    <div className="min-h-screen bg-gray-900 text-white flex flex-col items-center justify-center p-4 font-sans">
-      <div className="w-full max-w-4xl mx-auto flex flex-col gap-6">
-        <header className="text-center">
+    <div className="h-screen bg-gray-900 text-white flex flex-col p-4 font-sans">
+      <div className="w-full max-w-4xl mx-auto flex flex-col gap-6 h-full">
+        <header className="text-center flex-shrink-0">
           <h1 className="text-3xl md:text-4xl font-bold text-cyan-400">Přehrávač živého vysílání</h1>
           <p className="text-gray-400 mt-2">Parlament České republiky - Live</p>
         </header>
         
-        <main ref={videoPlayerContainerRef} className="bg-black rounded-lg shadow-2xl shadow-cyan-500/10 overflow-hidden relative">
+        <main ref={videoPlayerContainerRef} className="w-full bg-black rounded-lg shadow-2xl shadow-cyan-500/10 overflow-hidden relative flex-grow min-h-0 flex items-center justify-center">
           <VideoPlayer 
             src={STREAM_URL} 
             zoomLevel={zoomLevel}

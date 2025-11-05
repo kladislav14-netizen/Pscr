@@ -1,3 +1,4 @@
+
 import React, { useRef, useEffect, useState, forwardRef, useCallback } from 'react';
 import QualitySelector from './QualitySelector';
 
@@ -319,7 +320,7 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
   return (
     <div 
         ref={containerRef}
-        className={`relative w-full aspect-video bg-black flex items-center justify-center touch-none ${cursorClass}`}
+        className={`relative max-w-full max-h-full aspect-video bg-black flex items-center justify-center touch-none ${cursorClass}`}
         onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
         onMouseMove={(e) => {
           handlePanMove(e.clientX, e.clientY);
