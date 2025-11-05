@@ -7,7 +7,6 @@ interface ZoomControlsProps {
   minZoom: number;
   maxZoom: number;
   step: number;
-  onRefresh: () => void;
 }
 
 const MinusIcon: React.FC<{ className?: string }> = ({ className }) => (
@@ -24,17 +23,11 @@ const PlusIcon: React.FC<{ className?: string }> = ({ className }) => (
 
 const ResetIcon: React.FC<{ className?: string }> = ({ className }) => (
     <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5M15 15l5.25 5.25" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m-6 6L3.75 20.25m0 0v-4.5m0 4.5h4.5m6.75 0l5.25-5.25m0 0h-4.5m4.5 0v-4.5" />
     </svg>
 );
 
-const RefreshIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0 0 11.664 0l3.181-3.183m-4.991-2.695a2.25 2.25 0 0 0-2.25-2.25H10.5a2.25 2.25 0 0 0-2.25 2.25v.75" />
-    </svg>
-);
-
-const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, minZoom, maxZoom, step, onRefresh }) => {
+const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, minZoom, maxZoom, step }) => {
   const handleZoomIn = () => onZoomChange(zoomLevel + step);
   const handleZoomOut = () => onZoomChange(zoomLevel - step);
   const handleResetZoom = () => onZoomChange(1);
@@ -79,13 +72,6 @@ const ZoomControls: React.FC<ZoomControlsProps> = ({ zoomLevel, onZoomChange, mi
         aria-label="Resetovat přiblížení"
       >
         <ResetIcon className="w-6 h-6" />
-      </button>
-      <button
-        onClick={onRefresh}
-        className="p-2 rounded-full bg-gray-700 text-white hover:bg-cyan-500 transition-colors"
-        aria-label="Obnovit stream"
-      >
-        <RefreshIcon className="w-6 h-6" />
       </button>
     </div>
   );

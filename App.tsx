@@ -51,6 +51,7 @@ const App: React.FC = () => {
             onZoomChange={handleZoomChange}
             refreshKey={refreshKey}
             onToggleFullscreen={handleToggleFullscreen}
+            onRefresh={handleRefresh}
           />
         </main>
 
@@ -61,7 +62,6 @@ const App: React.FC = () => {
             minZoom={MIN_ZOOM}
             maxZoom={MAX_ZOOM}
             step={ZOOM_STEP}
-            onRefresh={handleRefresh}
           />
         </footer>
       </div>
