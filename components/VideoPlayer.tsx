@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState, forwardRef, useCallback } from 'react';
 import QualitySelector from './QualitySelector';
 
@@ -354,7 +353,7 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       />
 
       <div 
-        className={`absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/70 to-transparent p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
+        className={`absolute bottom-4 inset-x-4 bg-black/60 backdrop-blur-md rounded-xl p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
        >
          <div className="flex items-center justify-between gap-3 pointer-events-auto">
             {/* Left Controls */}
