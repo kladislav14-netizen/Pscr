@@ -1,4 +1,3 @@
-
 import React, { useRef, useEffect, useState, forwardRef, useCallback } from 'react';
 import QualitySelector from './QualitySelector';
 
@@ -345,7 +344,7 @@ const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLev
       <video
         ref={videoRef}
         playsInline
-        className="w-full h-full object-contain"
+        className="w-full h-full object-cover"
         style={{ 
           transform: `scale(${zoomLevel}) translateX(${pan.x}px) translateY(${pan.y}px)`, 
           transformOrigin: transformOrigin,
