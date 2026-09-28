@@ -1,454 +1,961 @@
-import React, { useRef, useEffect, useState, forwardRef, useCallback } from 'react';
-import QualitySelector from './QualitySelector';
+import React, {
+  useRef,
+  useEffect,
+  useState,
+  useCallback,
+  useImperativeHandle,
+  forwardRef,
+} from 'react';
+import Hls from 'hls.js';
+import {
+  Play,
+  Pause,
+  Volume2,
+  VolumeX,
+  Volume1,
+  RotateCcw,
+  RotateCw,
+  Maximize,
+  Minimize,
+  Sliders,
+  Camera,
+  PictureInPicture,
+  Tv,
+  AlertCircle,
+  ZoomIn,
+  RefreshCw,
+  ExternalLink,
+  Layers
+} from 'lucide-react';
+import { QualityLevel, PanOffset, PlayerStats, StreamItem } from '../types/player';
+import ZoomRadar from './ZoomRadar';
+import StatsForNerds from './StatsForNerds';
+import SettingsMenu from './SettingsMenu';
 
-// TypeScript declaration for Hls.js loaded from CDN
-declare const Hls: any;
+export interface VideoPlayerRef {
+  seekTo: (time: number) => void;
+  getCurrentTime: () => number;
+  play: () => void;
+  pause: () => void;
+  reload: () => void;
+}
 
 interface VideoPlayerProps {
-  src: string;
+  stream: StreamItem;
   zoomLevel: number;
   onZoomChange: (newZoom: number) => void;
-  refreshKey: number;
+  onResetZoom: () => void;
+  theaterMode: boolean;
+  onToggleTheaterMode: () => void;
   onToggleFullscreen: () => void;
-  onRefresh: () => void;
-  minZoom: number;
-  maxZoom: number;
-  step: number;
+  isFullscreen: boolean;
+  onTimeUpdate?: (currentTime: number, duration: number) => void;
 }
 
-// Define a type for HLS quality levels for better type safety
-export interface QualityLevel {
-  index: number;
-  height: number;
-  bitrate: number;
-}
+export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
+  (
+    {
+      stream,
+      zoomLevel,
+      onZoomChange,
+      onResetZoom,
+      theaterMode,
+      onToggleTheaterMode,
+      onToggleFullscreen,
+      isFullscreen,
+      onTimeUpdate,
+    },
+    ref
+  ) => {
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const hlsRef = useRef<Hls | null>(null);
+    const controlsTimerRef = useRef<number | null>(null);
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const gainNodeRef = useRef<GainNode | null>(null);
+    const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
 
-const formatBitrate = (bitrate: number): string => {
-  if (!bitrate) return '';
-  if (bitrate > 1000000) {
-    return `${(bitrate / 1000000).toFixed(1)} Mbps`;
-  }
-  return `${Math.round(bitrate / 1000)} kbps`;
-};
+    // Playback state
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [volume, setVolume] = useState(1);
+    const [isMuted, setIsMuted] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [bufferedEnd, setBufferedEnd] = useState(0);
+    const [playbackRate, setPlaybackRate] = useState(1);
+    const [audioBoost, setAudioBoost] = useState(1.0);
+    const [isLiveSynced, setIsLiveSynced] = useState(true);
 
-// --- Player Icons ---
+    // Stream status
+    const [hasError, setHasError] = useState(false);
+    const [errorMessage, setErrorMessage] = useState<string | null>(null);
+    const [isLoading, setIsLoading] = useState(true);
 
-const PlayIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z" />
-    </svg>
-);
+    // Visibility controls
+    const [controlsVisible, setControlsVisible] = useState(true);
+    const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+    const [showStats, setShowStats] = useState(false);
 
-const PauseIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 5.25v13.5m-6-13.5v13.5" />
-    </svg>
-);
+    // Quality state
+    const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
+    const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1);
+    const [currentBitrate, setCurrentBitrate] = useState<string>('Auto');
 
-const VolumeUpIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M19.114 5.636a9 9 0 010 12.728M16.463 8.288a5.25 5.25 0 010 7.424M6.75 8.25l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-    </svg>
-);
+    // Pan & Zoom
+    const [pan, setPan] = useState<PanOffset>({ x: 0, y: 0 });
+    const [isPanning, setIsPanning] = useState(false);
+    const panStartRef = useRef({ x: 0, y: 0 });
 
-const VolumeOffIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 9.75L19.5 12m0 0l2.25 2.25M19.5 12l2.25-2.25M19.5 12l-2.25 2.25m-10.5-6l4.72-4.72a.75.75 0 011.28.53v15.88a.75.75 0 01-1.28.53l-4.72-4.72H4.51c-.88 0-1.704-.507-1.938-1.354A9.01 9.01 0 012.25 12c0-.83.112-1.633.322-2.396C2.806 8.756 3.63 8.25 4.51 8.25H6.75z" />
-    </svg>
-);
+    // Broadcast HUD action badge
+    const [hudNotice, setHudNotice] = useState<string | null>(null);
+    const hudTimerRef = useRef<number | null>(null);
 
-const RefreshIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0 0 11.664 0l3.181-3.183m-4.991-2.695a2.25 2.25 0 0 0-2.25-2.25H10.5a2.25 2.25 0 0 0-2.25 2.25v.75" />
-    </svg>
-);
-
-const SettingsIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 0 1 1.37.49l1.296 2.247a1.125 1.125 0 0 1-.26 1.431l-1.003.827c-.293.24-.438.613-.43.992a6.759 6.759 0 0 1 0 1.844c.008.378.137.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 0 1-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.513 6.513 0 0 1-.22.128c-.333.183-.582.495-.644.869l-.213 1.28c-.09.543-.56.94-1.11.94h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.063-.374-.313-.686-.645-.87a6.52 6.52 0 0 1-.22-.127c-.325-.196-.72-.257-1.075-.124l-1.217.456a1.125 1.125 0 0 1-1.37-.49l-1.296-2.247a1.125 1.125 0 0 1 .26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.759 6.759 0 0 1 0-1.844c-.008-.378-.137-.75-.43-.99l-1.004-.828a1.125 1.125 0 0 1-.26-1.43l1.298-2.247a1.125 1.125 0 0 1 1.37-.491l1.217.456c.355.133.75.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.213-1.28Z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
-    </svg>
-);
-
-const FullscreenEnterIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 3.75v4.5m0-4.5h4.5m-4.5 0L9 9M3.75 20.25v-4.5m0 4.5h4.5m-4.5 0L9 15M20.25 3.75h-4.5m4.5 0v4.5m0-4.5L15 9m5.25 11.25h-4.5m4.5 0v-4.5m0 4.5L15 15" />
-    </svg>
-);
-
-const FullscreenExitIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M9 9V4.5M9 9H4.5M9 9 3.75 3.75M9 15v4.5M9 15H4.5M9 15l-5.25 5.25M15 9h4.5M15 9V4.5M15 9l5.25-5.25M15 15h4.5M15 15v4.5M15 15l5.25 5.25" />
-    </svg>
-);
-
-const MinusIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M15 12H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-    </svg>
-);
-
-const PlusIcon: React.FC<{ className?: string }> = ({ className }) => (
-    <svg className={className} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
-        <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v6m3-3H9m12 0a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
-    </svg>
-);
-
-// --- Component ---
-
-const VideoPlayer = forwardRef<HTMLDivElement, VideoPlayerProps>(({ src, zoomLevel, onZoomChange, refreshKey, onToggleFullscreen, onRefresh, minZoom, maxZoom, step }, ref) => {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const hlsRef = useRef<any>(null);
-  const controlsTimeoutRef = useRef<number | null>(null);
-
-  // Player state
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [volume, setVolume] = useState(1);
-  const [isMuted, setIsMuted] = useState(false);
-  
-  // Quality selection state
-  const [qualityLevels, setQualityLevels] = useState<QualityLevel[]>([]);
-  const [selectedQualityIndex, setSelectedQualityIndex] = useState<number>(-1); // -1 for Auto
-  const [activeQualityInfo, setActiveQualityInfo] = useState<QualityLevel | null>(null);
-  const [isQualityMenuOpen, setIsQualityMenuOpen] = useState(false);
-  const [controlsVisible, setControlsVisible] = useState(false);
-
-  // Panning and zooming state
-  const [pan, setPan] = useState({ x: 0, y: 0 });
-  const [isPanning, setIsPanning] = useState(false);
-  const panStartRef = useRef({ x: 0, y: 0 });
-  const [transformOrigin, setTransformOrigin] = useState('50% 50%');
-
-  // Fullscreen state
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  
-  const handleZoomIn = useCallback(() => onZoomChange(zoomLevel + step), [zoomLevel, step, onZoomChange]);
-  const handleZoomOut = useCallback(() => onZoomChange(zoomLevel - step), [zoomLevel, step, onZoomChange]);
-
-  const hideControls = useCallback(() => {
-    if (isQualityMenuOpen) return;
-    setControlsVisible(false);
-  }, [isQualityMenuOpen]);
-
-  const showControls = useCallback(() => {
-      setControlsVisible(true);
-      if (controlsTimeoutRef.current) {
-          clearTimeout(controlsTimeoutRef.current);
-      }
-      controlsTimeoutRef.current = window.setTimeout(hideControls, 3000);
-  }, [hideControls]);
-
-  useEffect(() => {
-    const handleFullscreenChange = () => {
-      const isFs = !!document.fullscreenElement;
-      setIsFullscreen(isFs);
-      if (isFs) {
-        showControls();
-      }
+    const triggerHud = (message: string) => {
+      setHudNotice(message);
+      if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
+      hudTimerRef.current = window.setTimeout(() => setHudNotice(null), 1200);
     };
-    document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
-  }, [showControls]);
 
-  const updatePan = useCallback((newPan: {x: number, y: number}, currentZoom: number) => {
-      if (!containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const maxPanX = (rect.width * currentZoom - rect.width) / 2 / currentZoom;
-      const maxPanY = (rect.height * currentZoom - rect.height) / 2 / currentZoom;
-      const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPan.x));
-      const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPan.y));
-      setPan({ x: clampedX, y: clampedY });
-  }, []);
+    // Seek scrub bar hover
+    const [hoverTime, setHoverTime] = useState<number | null>(null);
+    const [hoverPosPercent, setHoverPosPercent] = useState<number>(0);
+    const scrubBarRef = useRef<HTMLDivElement>(null);
 
-  useEffect(() => {
-    if (zoomLevel <= 1) {
-      setPan({ x: 0, y: 0 });
-    } else {
-       updatePan(pan, zoomLevel);
-    }
-  }, [zoomLevel, updatePan, pan]);
+    // Technical Diagnostics
+    const [stats, setStats] = useState<PlayerStats>({
+      resolution: '1920x1080',
+      fps: 30,
+      currentBitrate: '2.5 Mbps',
+      bufferLength: 0,
+      droppedFrames: 0,
+      zoomLevel: 1.0,
+      panX: 0,
+      panY: 0,
+      audioBoost: 1.0,
+      playbackRate: 1.0,
+      latencyToLive: 0,
+      codec: 'avc1.640028, mp4a.40.2',
+    });
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video) return;
+    const initHlsStream = useCallback(() => {
+      const video = videoRef.current;
+      if (!video) return;
 
-    const onPlay = () => setIsPlaying(true);
-    const onPause = () => setIsPlaying(false);
-    
-    video.addEventListener('play', onPlay);
-    video.addEventListener('pause', onPause);
-    
-    setIsPlaying(!video.paused);
-    setIsMuted(video.muted);
-    setVolume(video.volume);
+      setHasError(false);
+      setErrorMessage(null);
+      setIsLoading(true);
+      setIsPlaying(false);
+      setQualityLevels([]);
 
-    return () => {
-        video.removeEventListener('play', onPlay);
-        video.removeEventListener('pause', onPause);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (videoRef.current) {
-      const videoElement = videoRef.current;
-
-      const setupHls = () => {
-        if (hlsRef.current) {
-          hlsRef.current.destroy();
-        }
-        const hls = new Hls();
-        hlsRef.current = hls;
-        hls.loadSource(src);
-        hls.attachMedia(videoElement);
-        hls.on(Hls.Events.MEDIA_ATTACHED, () => {
-          videoElement.play().catch(error => console.warn("Autoplay was prevented:", error));
-        });
-        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
-            if (data.levels) {
-                const videoLevels: QualityLevel[] = data.levels
-                  .map((level: any, index: number) => ({
-                    index: index,
-                    height: level.height,
-                    bitrate: level.bitrate,
-                  }))
-                  .filter((level: QualityLevel) => level.height > 0)
-                  .sort((a: QualityLevel, b: QualityLevel) => b.height - a.height);
-                setQualityLevels(videoLevels);
-            }
-        });
-        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
-            const levelInfo = hls.levels[data.level];
-            setActiveQualityInfo({
-                index: data.level,
-                height: levelInfo.height,
-                bitrate: levelInfo.bitrate
-            });
-        });
-      };
-      
-      if (Hls.isSupported()) {
-        setupHls();
-      } else if (videoElement.canPlayType('application/vnd.apple.mpegurl')) {
-        videoElement.src = src;
-        videoElement.addEventListener('loadedmetadata', () => {
-           videoElement.play().catch(error => console.warn("Autoplay was prevented:", error));
-        });
-      }
-    }
-    return () => {
       if (hlsRef.current) {
         hlsRef.current.destroy();
         hlsRef.current = null;
       }
-      if (controlsTimeoutRef.current) {
-          clearTimeout(controlsTimeoutRef.current);
+
+      const isHls = stream.url.includes('.m3u8');
+
+      if (isHls && Hls.isSupported()) {
+        const hls = new Hls({
+          enableWorker: true,
+          lowLatencyMode: true,
+          backBufferLength: 90,
+        });
+        hlsRef.current = hls;
+
+        hls.loadSource(stream.url);
+        hls.attachMedia(video);
+
+        hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
+          setIsLoading(false);
+          setHasError(false);
+          if (data.levels && data.levels.length > 0) {
+            const lvls: QualityLevel[] = data.levels
+              .map((l: any, idx: number) => ({
+                index: idx,
+                height: l.height || 720,
+                bitrate: l.bitrate || 0,
+              }))
+              .sort((a, b) => b.height - a.height);
+            setQualityLevels(lvls);
+          }
+          video.play().catch(() => {});
+        });
+
+        hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+          const lvl = hls.levels[data.level];
+          if (lvl) {
+            const bitrateStr = lvl.bitrate > 1000000
+              ? `${(lvl.bitrate / 1000000).toFixed(1)} Mbps`
+              : `${Math.round(lvl.bitrate / 1000)} kbps`;
+            setCurrentBitrate(bitrateStr);
+            setStats((prev) => ({
+              ...prev,
+              resolution: `${lvl.width || 1920}x${lvl.height || 1080}`,
+              currentBitrate: bitrateStr,
+            }));
+          }
+        });
+
+        hls.on(Hls.Events.ERROR, (event, data) => {
+          if (data.fatal) {
+            switch (data.type) {
+              case Hls.ErrorTypes.NETWORK_ERROR:
+                setHasError(true);
+                setErrorMessage('Živý přenos v tomto sále právě nevysílá (mimo jednací dobu nebo přestávka).');
+                setIsLoading(false);
+                break;
+              case Hls.ErrorTypes.MEDIA_ERROR:
+                hls.recoverMediaError();
+                break;
+              default:
+                setHasError(true);
+                setErrorMessage('Chyba při inicializaci přenosu.');
+                setIsLoading(false);
+                hls.destroy();
+                break;
+            }
+          }
+        });
+      } else {
+        video.src = stream.url;
+        video.load();
+
+        const handleCanPlay = () => {
+          setIsLoading(false);
+          setHasError(false);
+          video.play().catch(() => {});
+        };
+
+        const handleError = () => {
+          setIsLoading(false);
+          setHasError(true);
+          setErrorMessage('Přenos není v této chvíli dostupný.');
+        };
+
+        video.addEventListener('canplay', handleCanPlay);
+        video.addEventListener('error', handleError);
+
+        return () => {
+          video.removeEventListener('canplay', handleCanPlay);
+          video.removeEventListener('error', handleError);
+        };
       }
+    }, [stream.url]);
+
+    useImperativeHandle(ref, () => ({
+      seekTo: (time: number) => {
+        if (videoRef.current) {
+          videoRef.current.currentTime = time;
+        }
+      },
+      getCurrentTime: () => (videoRef.current ? videoRef.current.currentTime : 0),
+      play: () => videoRef.current?.play(),
+      pause: () => videoRef.current?.pause(),
+      reload: () => initHlsStream(),
+    }));
+
+    const hideControls = useCallback(() => {
+      if (isSettingsOpen || showStats) return;
+      setControlsVisible(false);
+    }, [isSettingsOpen, showStats]);
+
+    const showControls = useCallback(() => {
+      setControlsVisible(true);
+      if (controlsTimerRef.current) {
+        window.clearTimeout(controlsTimerRef.current);
+      }
+      controlsTimerRef.current = window.setTimeout(hideControls, 3500);
+    }, [hideControls]);
+
+    const formatTime = (secs: number) => {
+      if (isNaN(secs) || secs < 0) return '0:00';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = Math.floor(secs % 60);
+      if (h > 0) {
+        return `${h}:${m < 10 ? '0' : ''}${m}:${s < 10 ? '0' : ''}${s}`;
+      }
+      return `${m}:${s < 10 ? '0' : ''}${s}`;
     };
-  }, [src, refreshKey]);
 
-  useEffect(() => {
-      if (hlsRef.current) {
-          hlsRef.current.currentLevel = selectedQualityIndex;
+    const initAudioBoost = useCallback(() => {
+      const video = videoRef.current;
+      if (!video || audioContextRef.current) return;
+
+      try {
+        const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+        if (!AudioContextClass) return;
+
+        const ctx = new AudioContextClass();
+        const gainNode = ctx.createGain();
+        const source = ctx.createMediaElementSource(video);
+
+        source.connect(gainNode);
+        gainNode.connect(ctx.destination);
+
+        audioContextRef.current = ctx;
+        gainNodeRef.current = gainNode;
+        sourceNodeRef.current = source;
+      } catch (err) {
+        console.warn('Web Audio gain initialization error:', err);
       }
-  }, [selectedQualityIndex]);
+    }, []);
 
-  const handlePanStart = (clientX: number, clientY: number) => {
-      if (zoomLevel <= 1) return;
+    useEffect(() => {
+      if (gainNodeRef.current) {
+        gainNodeRef.current.gain.value = audioBoost;
+      }
+    }, [audioBoost]);
+
+    useEffect(() => {
+      initHlsStream();
+      return () => {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+      };
+    }, [initHlsStream]);
+
+    // Video events & time updates
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      const onPlay = () => setIsPlaying(true);
+      const onPause = () => setIsPlaying(false);
+      const onWaiting = () => setIsLoading(true);
+      const onPlaying = () => setIsLoading(false);
+
+      const onTime = () => {
+        setCurrentTime(video.currentTime);
+        setDuration(video.duration || 0);
+
+        if (video.buffered.length > 0) {
+          const bufEnd = video.buffered.end(video.buffered.length - 1);
+          setBufferedEnd(bufEnd);
+          const bufLength = Math.max(0, bufEnd - video.currentTime);
+          setStats((prev) => ({
+            ...prev,
+            bufferLength: bufLength,
+            latencyToLive: stream.isLive ? Math.max(0, video.duration - video.currentTime) : null,
+          }));
+        }
+
+        if (onTimeUpdate) {
+          onTimeUpdate(video.currentTime, video.duration || 0);
+        }
+      };
+
+      video.addEventListener('play', onPlay);
+      video.addEventListener('pause', onPause);
+      video.addEventListener('waiting', onWaiting);
+      video.addEventListener('playing', onPlaying);
+      video.addEventListener('timeupdate', onTime);
+
+      return () => {
+        video.removeEventListener('play', onPlay);
+        video.removeEventListener('pause', onPause);
+        video.removeEventListener('waiting', onWaiting);
+        video.removeEventListener('playing', onPlaying);
+        video.removeEventListener('timeupdate', onTime);
+      };
+    }, [stream.isLive, onTimeUpdate]);
+
+    // Pan boundary calculations
+    const updatePan = useCallback(
+      (newPan: PanOffset, zoom: number) => {
+        if (!containerRef.current) return;
+        const rect = containerRef.current.getBoundingClientRect();
+        const maxPanX = ((rect.width * zoom - rect.width) / 2) / zoom;
+        const maxPanY = ((rect.height * zoom - rect.height) / 2) / zoom;
+
+        const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPan.x));
+        const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPan.y));
+
+        setPan({ x: clampedX, y: clampedY });
+        setStats((prev) => ({
+          ...prev,
+          zoomLevel: zoom,
+          panX: clampedX,
+          panY: clampedY,
+        }));
+      },
+      []
+    );
+
+    useEffect(() => {
+      if (zoomLevel <= 1.02) {
+        setPan({ x: 0, y: 0 });
+        setStats((prev) => ({ ...prev, zoomLevel: 1.0, panX: 0, panY: 0 }));
+      } else {
+        updatePan(pan, zoomLevel);
+      }
+    }, [zoomLevel, updatePan]);
+
+    const handlePanStart = (clientX: number, clientY: number) => {
+      if (zoomLevel <= 1.02) return;
       setIsPanning(true);
-      panStartRef.current = { x: clientX - pan.x * zoomLevel, y: clientY - pan.y * zoomLevel };
-  };
+      panStartRef.current = {
+        x: clientX - pan.x * zoomLevel,
+        y: clientY - pan.y * zoomLevel,
+      };
+    };
 
-  const handlePanMove = (clientX: number, clientY: number) => {
-      if (!isPanning) return;
+    const handlePanMove = (clientX: number, clientY: number) => {
+      if (!isPanning || zoomLevel <= 1.02) return;
       const newPan = {
-          x: (clientX - panStartRef.current.x) / zoomLevel,
-          y: (clientY - panStartRef.current.y) / zoomLevel
+        x: (clientX - panStartRef.current.x) / zoomLevel,
+        y: (clientY - panStartRef.current.y) / zoomLevel,
       };
       updatePan(newPan, zoomLevel);
-  };
+    };
 
-  const handlePanEnd = () => setIsPanning(false);
+    const handlePanEnd = () => setIsPanning(false);
 
-  const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
-    const newZoom = Math.max(1, zoomLevel - e.deltaY * 0.005);
-    onZoomChange(newZoom);
-  };
+    const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const delta = -e.deltaY * 0.003;
+      const newZoom = Math.max(1.0, Math.min(8.0, Number((zoomLevel + delta).toFixed(2))));
+      onZoomChange(newZoom);
+      triggerHud(`ZOOM ${newZoom.toFixed(1)}x`);
+    };
 
-  const handleQualityChange = (levelIndex: number) => {
-      setSelectedQualityIndex(levelIndex);
-      setIsQualityMenuOpen(false);
-  };
-  
-  const getQualityLabel = () => {
-    if (selectedQualityIndex === -1) {
-        return `Auto ${activeQualityInfo ? `(${activeQualityInfo.height}p)` : ''}`;
-    }
-    const selectedLevel = qualityLevels.find(l => l.index === selectedQualityIndex);
-    return selectedLevel ? `${selectedLevel.height}p` : '...';
-  }
-  
-  const togglePlayPause = useCallback(() => {
-    if (videoRef.current) {
-        if (videoRef.current.paused) videoRef.current.play();
-        else videoRef.current.pause();
-    }
-  }, []);
+    const togglePlay = () => {
+      initAudioBoost();
+      const video = videoRef.current;
+      if (!video) return;
 
-  const toggleMute = useCallback(() => {
-    const newMuted = !isMuted;
-    setIsMuted(newMuted);
-    if(videoRef.current) videoRef.current.muted = newMuted;
-  }, [isMuted]);
-
-  const handleVolumeChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-      const newVolume = parseFloat(e.target.value);
-      setVolume(newVolume);
-      if (videoRef.current) videoRef.current.volume = newVolume;
-      if (newVolume > 0 && isMuted) {
-          setIsMuted(false);
-          if (videoRef.current) videoRef.current.muted = false;
+      if (video.paused) {
+        video.play().catch(() => {});
+        setIsPlaying(true);
+        triggerHud('PŘEHRÁVÁNÍ');
+      } else {
+        video.pause();
+        setIsPlaying(false);
+        triggerHud('POZASTAVENO');
       }
-  }, [isMuted]);
+    };
 
-  const cursorClass = isPanning ? 'cursor-grabbing' : zoomLevel > 1 ? 'cursor-grab' : 'cursor-pointer';
+    const skipTime = useCallback((seconds: number) => {
+      const video = videoRef.current;
+      if (!video) return;
+      video.currentTime = Math.max(0, Math.min(video.duration || 999999, video.currentTime + seconds));
+      triggerHud(seconds > 0 ? `+${seconds} s` : `${seconds} s`);
+    }, []);
 
-  return (
-    <div 
-        ref={containerRef}
-        className={`relative max-w-full max-h-full aspect-video bg-black flex items-center justify-center touch-none ${cursorClass}`}
-        onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
-        onMouseMove={(e) => {
-          handlePanMove(e.clientX, e.clientY);
-          showControls();
-        }}
-        onMouseUp={handlePanEnd}
-        onMouseLeave={() => {
-          handlePanEnd();
-          hideControls();
-        }}
-        onWheel={handleWheel}
-        onTouchStart={(e) => {
-          if (e.touches.length === 1) handlePanStart(e.touches[0].clientX, e.touches[0].clientY);
-          showControls();
-        }}
-        onTouchMove={(e) => {
-          if (e.touches.length === 1) handlePanMove(e.touches[0].clientX, e.touches[0].clientY);
-        }}
-        onTouchEnd={handlePanEnd}
-        onClick={showControls}
-    >
-      <video
-        ref={videoRef}
-        playsInline
-        className="w-full h-full object-cover"
-        style={{ 
-          transform: `scale(${zoomLevel}) translateX(${pan.x}px) translateY(${pan.y}px)`, 
-          transformOrigin: transformOrigin,
-          transition: isPanning ? 'none' : 'transform 0.1s ease-out'
-        }}
-      />
+    const handleSyncToLive = () => {
+      const video = videoRef.current;
+      if (!video) return;
+      if (video.duration && isFinite(video.duration)) {
+        video.currentTime = video.duration - 0.5;
+        setIsLiveSynced(true);
+        triggerHud('PŘÍMÝ PŘENOS');
+      }
+    };
 
-      <div 
-        className={`absolute bottom-8 inset-x-4 bg-black/60 backdrop-blur-md rounded-xl p-2 md:p-4 transition-opacity duration-300 z-10 ${controlsVisible ? 'opacity-100' : 'opacity-0'} ${isQualityMenuOpen ? 'pointer-events-auto' : 'pointer-events-none'}`}
-       >
-         <div className="flex items-center justify-between gap-3 pointer-events-auto">
-            {/* Left Controls */}
-            <div className="flex items-center gap-3">
-                <button onClick={togglePlayPause} className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 transition-colors" aria-label={isPlaying ? 'Pozastavit' : 'Přehrát'}>
-                    {isPlaying ? <PauseIcon className="w-6 h-6"/> : <PlayIcon className="w-6 h-6"/>}
-                </button>
-                <div className="flex items-center gap-2">
-                    <button onClick={toggleMute} className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 transition-colors" aria-label={isMuted ? 'Zapnout zvuk' : 'Vypnout zvuk'}>
-                       {isMuted || volume === 0 ? <VolumeOffIcon className="w-6 h-6" /> : <VolumeUpIcon className="w-6 h-6" />}
-                    </button>
-                    <input 
-                        type="range" min="0" max="1" step="0.05" 
-                        value={isMuted ? 0 : volume} 
-                        onChange={handleVolumeChange}
-                        className="w-24 h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                        aria-label="Ovládání hlasitosti"
-                    />
-                </div>
-                <div className="bg-red-600 text-white text-sm font-bold px-2 py-1 rounded-md">
-                    LIVE
-                </div>
+    const handleVolumeChange = (newVol: number) => {
+      const video = videoRef.current;
+      setVolume(newVol);
+      if (video) {
+        video.volume = newVol;
+        if (newVol > 0 && isMuted) {
+          setIsMuted(false);
+          video.muted = false;
+        }
+      }
+    };
+
+    const toggleMute = () => {
+      const video = videoRef.current;
+      const nextMuted = !isMuted;
+      setIsMuted(nextMuted);
+      if (video) video.muted = nextMuted;
+      triggerHud(nextMuted ? 'ZVUK VYPNUT' : 'ZVUK ZAPNUT');
+    };
+
+    const handleRateChange = (rate: number) => {
+      setPlaybackRate(rate);
+      if (videoRef.current) {
+        videoRef.current.playbackRate = rate;
+      }
+      setStats((prev) => ({ ...prev, playbackRate: rate }));
+      triggerHud(`RYCHLOST ${rate}x`);
+    };
+
+    const handleQualityChange = (levelIndex: number) => {
+      setSelectedQualityIndex(levelIndex);
+      if (hlsRef.current) {
+        hlsRef.current.currentLevel = levelIndex;
+      }
+    };
+
+    const handleTakeScreenshot = () => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth || 1920;
+        canvas.height = video.videoHeight || 1080;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL('image/png');
+
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = `snemovna_snimek_${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        triggerHud('SNÍMEK ULOŽEN');
+      } catch (err) {
+        console.error('Screenshot capture failed:', err);
+      }
+    };
+
+    const handleTogglePiP = async () => {
+      const video = videoRef.current;
+      if (!video) return;
+      try {
+        if (document.pictureInPictureElement) {
+          await document.exitPictureInPicture();
+        } else if (document.pictureInPictureEnabled) {
+          await video.requestPictureInPicture();
+        }
+      } catch (err) {
+        console.error('PiP error:', err);
+      }
+    };
+
+    const handleScrubClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!scrubBarRef.current || !videoRef.current) return;
+      const rect = scrubBarRef.current.getBoundingClientRect();
+      const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      const targetTime = pos * (duration || 100);
+      videoRef.current.currentTime = targetTime;
+    };
+
+    const handleScrubMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!scrubBarRef.current) return;
+      const rect = scrubBarRef.current.getBoundingClientRect();
+      const pos = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+      setHoverPosPercent(pos * 100);
+      setHoverTime(pos * (duration || 0));
+    };
+
+    const handleScrubMouseLeave = () => setHoverTime(null);
+
+    // Keyboard shortcuts
+    useEffect(() => {
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
+        switch (e.key.toLowerCase()) {
+          case ' ':
+          case 'k':
+            e.preventDefault();
+            togglePlay();
+            break;
+          case 'f':
+            e.preventDefault();
+            onToggleFullscreen();
+            break;
+          case 't':
+            e.preventDefault();
+            onToggleTheaterMode();
+            break;
+          case 'm':
+            e.preventDefault();
+            toggleMute();
+            break;
+          case 'j':
+          case 'arrowleft':
+            e.preventDefault();
+            skipTime(-10);
+            break;
+          case 'l':
+          case 'arrowright':
+            e.preventDefault();
+            skipTime(10);
+            break;
+          case 'arrowup':
+            e.preventDefault();
+            handleVolumeChange(Math.min(1, volume + 0.05));
+            break;
+          case 'arrowdown':
+            e.preventDefault();
+            handleVolumeChange(Math.max(0, volume - 0.05));
+            break;
+          case '+':
+          case '=':
+            e.preventDefault();
+            onZoomChange(Math.min(8.0, Number((zoomLevel + 0.2).toFixed(2))));
+            triggerHud(`ZOOM ${(zoomLevel + 0.2).toFixed(1)}x`);
+            break;
+          case '-':
+            e.preventDefault();
+            onZoomChange(Math.max(1.0, Number((zoomLevel - 0.2).toFixed(2))));
+            triggerHud(`ZOOM ${(zoomLevel - 0.2).toFixed(1)}x`);
+            break;
+          case '0':
+            e.preventDefault();
+            onResetZoom();
+            triggerHud('ZOOM 1.0x');
+            break;
+          case 's':
+            e.preventDefault();
+            handleTakeScreenshot();
+            break;
+          default:
+            break;
+        }
+      };
+
+      window.addEventListener('keydown', handleKeyDown);
+      return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [volume, zoomLevel, isFullscreen, onToggleFullscreen, onToggleTheaterMode, onZoomChange, onResetZoom, skipTime]);
+
+    const playedPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
+    const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
+
+    const cursorStyle = isPanning
+      ? 'cursor-grabbing'
+      : zoomLevel > 1.05
+      ? 'cursor-grab'
+      : 'cursor-pointer';
+
+    return (
+      <div className="relative w-full flex items-center justify-center">
+        <div
+          ref={containerRef}
+          onMouseMove={() => showControls()}
+          onMouseLeave={() => {
+            handlePanEnd();
+            hideControls();
+          }}
+          onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
+          onMouseMoveCapture={(e) => handlePanMove(e.clientX, e.clientY)}
+          onMouseUp={handlePanEnd}
+          onWheel={handleWheel}
+          className={`relative w-full aspect-video bg-[#030712] rounded-2xl overflow-hidden shadow-2xl border border-slate-800 select-none group touch-none ${cursorStyle}`}
+        >
+          {/* Main Video Viewport */}
+          <video
+            ref={videoRef}
+            playsInline
+            crossOrigin="anonymous"
+            className="w-full h-full object-cover transition-transform duration-75"
+            style={{
+              transform: `scale(${zoomLevel}) translate(${pan.x}px, ${pan.y}px)`,
+              transformOrigin: '50% 50%',
+            }}
+          />
+
+          {/* Click to play/pause */}
+          <div
+            className="absolute inset-0 z-10"
+            onClick={togglePlay}
+          />
+
+          {/* On-screen HUD readout */}
+          {hudNotice && (
+            <div className="absolute top-4 inset-x-0 flex justify-center pointer-events-none z-30">
+              <div className="px-4 py-1.5 rounded-xl bg-slate-950/90 backdrop-blur-md border border-slate-700 text-sky-300 font-mono text-xs font-bold tracking-wider shadow-2xl">
+                {hudNotice}
+              </div>
             </div>
-            
-            {/* Right Controls */}
-            <div className="flex items-center gap-3">
-                {/* ZOOM CONTROLS - hidden on small screens */}
-                <div className="hidden md:flex items-center gap-2">
-                     <button
-                        onClick={handleZoomOut}
-                        disabled={zoomLevel <= minZoom}
-                        className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        aria-label="Oddálit"
-                    >
-                        <MinusIcon className="w-6 h-6" />
-                    </button>
-                     <input
-                        type="range"
-                        min={minZoom}
-                        max={maxZoom}
-                        step={step}
-                        value={zoomLevel}
-                        onChange={(e) => onZoomChange(parseFloat(e.target.value))}
-                        className="w-20 h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer accent-cyan-400"
-                        aria-label="Posuvník přiblížení"
-                        />
-                    <button
-                        onClick={handleZoomIn}
-                        disabled={zoomLevel >= maxZoom}
-                        className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        aria-label="Přiblížit"
-                    >
-                        <PlusIcon className="w-6 h-6" />
-                    </button>
-                    <span className="font-mono text-sm text-cyan-300 w-14 text-center">{zoomLevel.toFixed(1)}x</span>
-                </div>
-                {/* END ZOOM CONTROLS */}
+          )}
 
-                <span className="text-sm font-semibold hidden lg:block">{getQualityLabel()}</span>
-                <div className="relative">
-                    <button
-                        onClick={() => setIsQualityMenuOpen(prev => !prev)}
-                        disabled={qualityLevels.length === 0}
-                        className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-                        aria-label="Nastavení kvality"
-                    >
-                        <SettingsIcon className="w-6 h-6" />
-                    </button>
-                    {isQualityMenuOpen && (
-                        <QualitySelector
-                            levels={qualityLevels}
-                            currentLevelIndex={selectedQualityIndex}
-                            onQualityChange={handleQualityChange}
-                        />
-                    )}
-                </div>
-                 <button
-                    onClick={onRefresh}
-                    className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 transition-colors"
-                    aria-label="Obnovit stream"
-                >
-                    <RefreshIcon className="w-6 h-6" />
-                </button>
+          {/* Zoom Radar Mini Map */}
+          <ZoomRadar
+            zoomLevel={zoomLevel}
+            pan={pan}
+            onPanChange={(newPan) => updatePan(newPan, zoomLevel)}
+            onResetZoom={onResetZoom}
+          />
+
+          {/* Technical Diagnostics modal */}
+          {showStats && (
+            <StatsForNerds
+              stats={stats}
+              streamName={stream.name}
+              onClose={() => setShowStats(false)}
+            />
+          )}
+
+          {/* Loading indicator */}
+          {isLoading && !hasError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none z-20">
+              <div className="w-10 h-10 border-3 border-sky-400 border-t-transparent rounded-full animate-spin"></div>
+              <span className="text-xs text-slate-300 font-medium mt-3 bg-slate-900/90 px-3.5 py-1.5 rounded-lg border border-slate-800">
+                Připojování k živému vysílání ČRa...
+              </span>
+            </div>
+          )}
+
+          {/* Offline / Inactive State (e.g. parliament outside session hours) */}
+          {hasError && (
+            <div className="absolute inset-0 flex flex-col items-center justify-center p-6 bg-slate-950/95 backdrop-blur-md text-white z-20 text-center space-y-4">
+              <div className="p-3.5 bg-amber-500/10 text-amber-400 rounded-2xl border border-amber-500/30">
+                <AlertCircle className="w-10 h-10" />
+              </div>
+              <div className="max-w-md space-y-2">
+                <h3 className="text-lg font-bold text-slate-100">
+                  Živý přenos v tomto sále právě nevysílá
+                </h3>
+                <p className="text-xs text-slate-300 leading-relaxed">
+                  Poslanecká sněmovna zasedá ve stanovených dnech (obvykle v úterý od 14:00, středa až pátek od 9:00). Vyberte jiný z 5 kanálů sněmovny nebo ověřte harmonogram schůzí.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
                 <button
-                onClick={onToggleFullscreen}
-                className="p-2 rounded-full bg-gray-800/70 text-white hover:bg-cyan-500/90 transition-colors"
-                aria-label="Celá obrazovka"
+                  onClick={() => initHlsStream()}
+                  className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-sky-600/30 transition-all active:scale-95"
                 >
-                {isFullscreen ? <FullscreenExitIcon className="w-6 h-6" /> : <FullscreenEnterIcon className="w-6 h-6" />}
+                  <RefreshCw className="w-3.5 h-3.5" />
+                  <span>Zkusit znovu připojit</span>
                 </button>
-            </div>
-         </div>
-      </div>
-    </div>
-  );
-});
 
+                <a
+                  href="https://www.psp.cz/sqw/hp.sqw?k=203"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
+                >
+                  <Tv className="w-3.5 h-3.5 text-sky-400" />
+                  <span>Harmonogram schůzí (psp.cz)</span>
+                  <ExternalLink className="w-3 h-3 text-slate-400" />
+                </a>
+              </div>
+            </div>
+          )}
+
+          {/* Settings Menu Popup */}
+          {isSettingsOpen && (
+            <SettingsMenu
+              qualityLevels={qualityLevels}
+              selectedQualityIndex={selectedQualityIndex}
+              onQualityChange={handleQualityChange}
+              playbackRate={playbackRate}
+              onPlaybackRateChange={handleRateChange}
+              audioBoost={audioBoost}
+              onAudioBoostChange={setAudioBoost}
+              showStats={showStats}
+              onToggleStats={() => setShowStats(!showStats)}
+              hasSubtitles={false}
+              subtitlesEnabled={false}
+              onToggleSubtitles={() => {}}
+              onClose={() => setIsSettingsOpen(false)}
+            />
+          )}
+
+          {/* Bottom Player Controls Bar */}
+          <div
+            className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent pt-12 pb-3.5 px-4 md:px-5 transition-opacity duration-200 z-30 ${
+              controlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
+            }`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Timeline / Live Scrubber */}
+            <div
+              ref={scrubBarRef}
+              onClick={handleScrubClick}
+              onMouseMove={handleScrubMouseMove}
+              onMouseLeave={handleScrubMouseLeave}
+              className="relative w-full h-2 group/scrub flex items-center cursor-pointer mb-3"
+            >
+              <div className="absolute inset-x-0 h-1 group-hover/scrub:h-1.5 bg-slate-700/60 rounded-full transition-all"></div>
+              <div
+                style={{ width: `${bufferedPercent}%` }}
+                className="absolute left-0 h-1 group-hover/scrub:h-1.5 bg-slate-500/50 rounded-full transition-all"
+              ></div>
+              <div
+                style={{ width: `${playedPercent}%` }}
+                className="absolute left-0 h-1 group-hover/scrub:h-1.5 bg-sky-500 rounded-full transition-all"
+              ></div>
+              <div
+                style={{ left: `${playedPercent}%` }}
+                className="absolute -translate-x-1/2 w-3.5 h-3.5 bg-sky-400 border-2 border-white rounded-full scale-0 group-hover/scrub:scale-100 transition-transform shadow-md pointer-events-none"
+              ></div>
+
+              {hoverTime !== null && (
+                <div
+                  style={{ left: `${hoverPosPercent}%` }}
+                  className="absolute -top-7 -translate-x-1/2 px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-[11px] font-mono text-slate-200 pointer-events-none shadow-lg"
+                >
+                  {formatTime(hoverTime)}
+                </div>
+              )}
+            </div>
+
+            {/* Control Bar Actions */}
+            <div className="flex items-center justify-between text-white text-xs">
+              {/* Left group */}
+              <div className="flex items-center gap-2 md:gap-3">
+                <button
+                  onClick={togglePlay}
+                  className="w-8 h-8 rounded-xl bg-slate-800/90 hover:bg-sky-600 text-white flex items-center justify-center transition-colors border border-slate-700/80 active:scale-95 shadow-sm"
+                  title={isPlaying ? 'Pozastavit (Mezerník / K)' : 'Spustit přehrávání (Mezerník / K)'}
+                >
+                  {isPlaying ? (
+                    <Pause className="w-4 h-4 fill-current" />
+                  ) : (
+                    <Play className="w-4 h-4 fill-current ml-0.5" />
+                  )}
+                </button>
+
+                <button
+                  onClick={() => skipTime(-10)}
+                  className="p-1.5 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition-colors"
+                  title="O 10 sekund zpět (J / ←)"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                </button>
+
+                <button
+                  onClick={() => skipTime(10)}
+                  className="p-1.5 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition-colors"
+                  title="O 10 sekund vpřed (L / →)"
+                >
+                  <RotateCw className="w-3.5 h-3.5" />
+                </button>
+
+                {/* Volume & Audio boost */}
+                <div className="flex items-center group/vol gap-1 pl-1">
+                  <button
+                    onClick={toggleMute}
+                    className="p-1.5 text-slate-300 hover:text-white rounded-lg hover:bg-slate-800 transition-colors"
+                    title={isMuted ? 'Zapnout zvuk (M)' : 'Ztlumit zvuk (M)'}
+                  >
+                    {isMuted || volume === 0 ? (
+                      <VolumeX className="w-4 h-4 text-amber-400" />
+                    ) : volume < 0.5 ? (
+                      <Volume1 className="w-4 h-4" />
+                    ) : (
+                      <Volume2 className="w-4 h-4" />
+                    )}
+                  </button>
+
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.05"
+                    value={isMuted ? 0 : volume}
+                    onChange={(e) => handleVolumeChange(parseFloat(e.target.value))}
+                    className="w-0 group-hover/vol:w-16 md:group-hover/vol:w-20 transition-all duration-200 h-1.5 bg-slate-700 rounded-lg cursor-pointer accent-sky-400"
+                    title="Hlasitost"
+                  />
+
+                  {audioBoost > 1.05 && (
+                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-800/80 px-1.5 py-0.5 rounded ml-1" title="Zesílení zvuku pro tiché řečníky">
+                      +{Math.round((audioBoost - 1) * 100)}%
+                    </span>
+                  )}
+                </div>
+
+                {/* Live Tally Button */}
+                <button
+                  onClick={handleSyncToLive}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold tracking-wider transition-all border ${
+                    isLiveSynced
+                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-sm'
+                      : 'bg-slate-800 hover:bg-emerald-600/30 text-slate-400 hover:text-emerald-300 border-slate-700'
+                  }`}
+                  title="Kliknutím skočíte na živé vysílání"
+                >
+                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                  <span>PŘÍMÝ PŘENOS</span>
+                </button>
+              </div>
+
+              {/* Right group */}
+              <div className="flex items-center gap-1 md:gap-1.5">
+                {/* Zoom readout badge */}
+                <div className="flex items-center gap-1 bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-700 text-[11px] font-mono shadow-sm">
+                  <ZoomIn className="w-3.5 h-3.5 text-sky-400" />
+                  <span className="text-sky-300 font-bold min-w-[32px] text-center">
+                    {zoomLevel.toFixed(1)}x
+                  </span>
+                  {zoomLevel > 1.05 && (
+                    <button
+                      onClick={onResetZoom}
+                      title="Resetovat výřez (1x)"
+                      className="text-slate-400 hover:text-white p-0.5 ml-0.5"
+                    >
+                      <RotateCcw className="w-2.5 h-2.5" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Screenshot tool */}
+                <button
+                  onClick={handleTakeScreenshot}
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+                  title="Uložit snímek obrazu (S)"
+                >
+                  <Camera className="w-4 h-4" />
+                </button>
+
+                {/* Settings / Configuration */}
+                <button
+                  onClick={() => setIsSettingsOpen(!isSettingsOpen)}
+                  className={`p-2 rounded-xl transition-colors ${
+                    isSettingsOpen
+                      ? 'text-sky-400 bg-slate-800'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Nastavení zvuku a kvality"
+                >
+                  <Sliders className="w-4 h-4" />
+                </button>
+
+                {/* PiP */}
+                <button
+                  onClick={handleTogglePiP}
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors hidden sm:block"
+                  title="Obraz v obraze"
+                >
+                  <PictureInPicture className="w-4 h-4" />
+                </button>
+
+                {/* Wide / Cinema layout toggle */}
+                <button
+                  onClick={onToggleTheaterMode}
+                  className={`p-2 rounded-xl transition-colors hidden md:block ${
+                    theaterMode
+                      ? 'text-sky-400 bg-slate-800'
+                      : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                  }`}
+                  title="Rozšířené zobrazení (T)"
+                >
+                  <Tv className="w-4 h-4" />
+                </button>
+
+                {/* Fullscreen */}
+                <button
+                  onClick={onToggleFullscreen}
+                  className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
+                  title={isFullscreen ? 'Zmenšit okno (F)' : 'Celá obrazovka (F)'}
+                >
+                  {isFullscreen ? (
+                    <Minimize className="w-4 h-4" />
+                  ) : (
+                    <Maximize className="w-4 h-4" />
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+);
+
+VideoPlayer.displayName = 'VideoPlayer';
 export default VideoPlayer;
