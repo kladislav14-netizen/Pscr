@@ -1,5 +1,5 @@
 import React from 'react';
-import { ZoomIn, ZoomOut, RotateCcw, Move, Target, Eye } from 'lucide-react';
+import { ZoomIn, ZoomOut, RotateCcw, Move, Target } from 'lucide-react';
 
 interface ZoomControlsProps {
   zoomLevel: number;
@@ -39,8 +39,8 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
     <div className={`bg-[#111827] border border-slate-800 rounded-2xl p-3.5 shadow-xl ${className}`}>
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3.5">
         {/* Left: Continuous zoom slider & stepper */}
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1.5 text-xs font-bold text-sky-400 uppercase tracking-wider min-w-[70px]">
+        <div className="flex items-center gap-2.5 sm:gap-3 flex-wrap sm:flex-nowrap">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-sky-400 uppercase tracking-wider min-w-[65px]">
             <Target className="w-4 h-4 text-sky-400 flex-shrink-0" />
             <span>Zoom</span>
           </div>
@@ -48,13 +48,13 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
           <button
             onClick={handleZoomOut}
             disabled={zoomLevel <= minZoom}
-            className="w-9 h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 disabled:opacity-30 disabled:cursor-not-allowed border border-slate-700/80 flex items-center justify-center transition-all active:scale-95 shadow-sm"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 disabled:opacity-30 disabled:cursor-not-allowed border border-slate-700/80 flex items-center justify-center transition-all active:scale-95 shadow-sm"
             title="Oddálit (-)"
           >
             <ZoomOut className="w-4 h-4" />
           </button>
 
-          <div className="relative flex-1 md:w-44 flex items-center">
+          <div className="relative flex-1 min-w-[120px] sm:w-44 flex items-center">
             <input
               type="range"
               min={minZoom}
@@ -70,28 +70,28 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
           <button
             onClick={handleZoomIn}
             disabled={zoomLevel >= maxZoom}
-            className="w-9 h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 disabled:opacity-30 disabled:cursor-not-allowed border border-slate-700/80 flex items-center justify-center transition-all active:scale-95 shadow-sm"
+            className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-100 disabled:opacity-30 disabled:cursor-not-allowed border border-slate-700/80 flex items-center justify-center transition-all active:scale-95 shadow-sm"
             title="Přiblížit (+)"
           >
             <ZoomIn className="w-4 h-4" />
           </button>
 
           {/* Current Zoom Readout Badge */}
-          <div className="px-2.5 py-1 rounded-lg bg-sky-950/70 border border-sky-500/40 text-sky-300 font-mono text-xs font-bold min-w-[50px] text-center shadow-inner">
+          <div className="px-2.5 py-1 rounded-lg bg-sky-950/70 border border-sky-500/40 text-sky-300 font-mono text-xs font-bold min-w-[48px] text-center shadow-inner">
             {zoomLevel.toFixed(1)}x
           </div>
         </div>
 
         {/* Right: Quick focal presets */}
         <div className="flex items-center justify-between md:justify-end gap-2 pt-2 md:pt-0 border-t md:border-t-0 border-slate-800/80">
-          <div className="flex items-center gap-1.5 flex-1 md:flex-initial">
+          <div className="flex items-center gap-1.5 flex-1 md:flex-initial flex-wrap sm:flex-nowrap">
             {presets.map((p) => {
               const isActive = Math.abs(zoomLevel - p.zoom) < 0.2;
               return (
                 <button
                   key={p.label}
                   onClick={() => onZoomChange(p.zoom)}
-                  className={`flex-1 md:flex-initial px-3 py-1.5 rounded-xl text-xs font-medium transition-all border ${
+                  className={`flex-1 sm:flex-initial px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-medium transition-all border ${
                     isActive
                       ? 'bg-sky-500 text-white font-bold border-sky-400 shadow-md shadow-sky-500/25'
                       : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300 border-slate-700/60 hover:text-white'
@@ -117,13 +117,14 @@ export const ZoomControls: React.FC<ZoomControlsProps> = ({
             </button>
           </div>
 
-          <div className="hidden lg:flex items-center gap-1.5 text-xs text-slate-400 pl-3 border-l border-slate-800">
-            <Move className="w-3.5 h-3.5 text-sky-400" />
-            <span>Tažením myši posouváte výřez</span>
+          <div className="hidden lg:flex items-center gap-1.5 text-[11px] text-slate-400 pl-3 border-l border-slate-800">
+            <Move className="w-3.5 h-3.5 text-sky-400 flex-shrink-0" />
+            <span>Posunujte tažením prstu nebo myši • Zoom 2 prsty</span>
           </div>
         </div>
       </div>
     </div>
   );
 };
+
 export default ZoomControls;

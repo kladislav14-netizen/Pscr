@@ -25,7 +25,7 @@ import {
   ZoomIn,
   RefreshCw,
   ExternalLink,
-  Layers
+  Move
 } from 'lucide-react';
 import { QualityLevel, PanOffset, PlayerStats, StreamItem } from '../types/player';
 import ZoomRadar from './ZoomRadar';
@@ -38,6 +38,7 @@ export interface VideoPlayerRef {
   play: () => void;
   pause: () => void;
   reload: () => void;
+  toggleFullscreen: () => void;
 }
 
 interface VideoPlayerProps {
@@ -75,6 +76,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     const gainNodeRef = useRef<GainNode | null>(null);
     const sourceNodeRef = useRef<MediaElementAudioSourceNode | null>(null);
 
+    // Internal In-App Fullscreen Fallback (for iframes or mobile devices where HTML5 requestFullscreen is restricted)
+    const [isInternalFullscreen, setIsInternalFullscreen] = useState(false);
+
     // Playback state
     const [isPlaying, setIsPlaying] = useState(false);
     const [volume, setVolume] = useState(1);
@@ -103,25 +107,69 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
     // Pan & Zoom
     const [pan, setPan] = useState<PanOffset>({ x: 0, y: 0 });
+    const [maxPan, setMaxPan] = useState<PanOffset>({ x: 0, y: 0 });
     const [isPanning, setIsPanning] = useState(false);
-    const panStartRef = useRef({ x: 0, y: 0 });
+
+    // Mouse drag tracking refs
+    const mouseDragRef = useRef({
+      isDown: false,
+      startX: 0,
+      startY: 0,
+      startPanX: 0,
+      startPanY: 0,
+      hasMoved: false,
+      startTime: 0,
+    });
+
+    // Touch interaction tracking refs
+    const touchStateRef = useRef<{
+      mode: 'none' | 'pan' | 'pinch';
+      startX: number;
+      startY: number;
+      startPanX: number;
+      startPanY: number;
+      hasMoved: boolean;
+      startTime: number;
+      initialPinchDist: number;
+      initialPinchZoom: number;
+      initialMidX: number;
+      initialMidY: number;
+      lastTapTime: number;
+      lastTapX: number;
+      lastTapY: number;
+    }>({
+      mode: 'none',
+      startX: 0,
+      startY: 0,
+      startPanX: 0,
+      startPanY: 0,
+      hasMoved: false,
+      startTime: 0,
+      initialPinchDist: 0,
+      initialPinchZoom: 1,
+      initialMidX: 0,
+      initialMidY: 0,
+      lastTapTime: 0,
+      lastTapX: 0,
+      lastTapY: 0,
+    });
 
     // Broadcast HUD action badge
     const [hudNotice, setHudNotice] = useState<string | null>(null);
     const hudTimerRef = useRef<number | null>(null);
 
-    const triggerHud = (message: string) => {
+    const triggerHud = useCallback((message: string) => {
       setHudNotice(message);
       if (hudTimerRef.current) window.clearTimeout(hudTimerRef.current);
-      hudTimerRef.current = window.setTimeout(() => setHudNotice(null), 1200);
-    };
+      hudTimerRef.current = window.setTimeout(() => setHudNotice(null), 1400);
+    }, []);
 
     // Seek scrub bar hover
     const [hoverTime, setHoverTime] = useState<number | null>(null);
     const [hoverPosPercent, setHoverPosPercent] = useState<number>(0);
     const scrubBarRef = useRef<HTMLDivElement>(null);
 
-    // Technical Diagnostics
+    // Diagnostics stats
     const [stats, setStats] = useState<PlayerStats>({
       resolution: '1920x1080',
       fps: 30,
@@ -137,6 +185,142 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       codec: 'avc1.640028, mp4a.40.2',
     });
 
+    // Compute max pan in physical screen pixels
+    const calculateMaxPan = useCallback((zoom: number): PanOffset => {
+      if (!containerRef.current || zoom <= 1.01) {
+        return { x: 0, y: 0 };
+      }
+      const rect = containerRef.current.getBoundingClientRect();
+      const maxX = Math.max(0, (rect.width * (zoom - 1)) / 2);
+      const maxY = Math.max(0, (rect.height * (zoom - 1)) / 2);
+      return { x: maxX, y: maxY };
+    }, []);
+
+    // Update pan ensuring it stays strictly within physical bounds
+    const updatePan = useCallback(
+      (newPan: PanOffset, zoom: number) => {
+        const bounds = calculateMaxPan(zoom);
+        setMaxPan(bounds);
+
+        if (zoom <= 1.01 || (bounds.x === 0 && bounds.y === 0)) {
+          setPan({ x: 0, y: 0 });
+          setStats((prev) => ({ ...prev, zoomLevel: zoom, panX: 0, panY: 0 }));
+          return;
+        }
+
+        const clampedX = Math.max(-bounds.x, Math.min(bounds.x, newPan.x));
+        const clampedY = Math.max(-bounds.y, Math.min(bounds.y, newPan.y));
+
+        setPan({ x: clampedX, y: clampedY });
+        setStats((prev) => ({
+          ...prev,
+          zoomLevel: zoom,
+          panX: Math.round(clampedX),
+          panY: Math.round(clampedY),
+        }));
+      },
+      [calculateMaxPan]
+    );
+
+    // Keep pan clamped when zoom changes
+    useEffect(() => {
+      const bounds = calculateMaxPan(zoomLevel);
+      setMaxPan(bounds);
+
+      if (zoomLevel <= 1.01) {
+        setPan({ x: 0, y: 0 });
+      } else {
+        setPan((prev) => ({
+          x: Math.max(-bounds.x, Math.min(bounds.x, prev.x)),
+          y: Math.max(-bounds.y, Math.min(bounds.y, prev.y)),
+        }));
+      }
+
+      setStats((prev) => ({
+        ...prev,
+        zoomLevel,
+      }));
+    }, [zoomLevel, calculateMaxPan]);
+
+    // Recalculate bounds on window resize
+    useEffect(() => {
+      const handleResize = () => {
+        const bounds = calculateMaxPan(zoomLevel);
+        setMaxPan(bounds);
+        setPan((prev) => ({
+          x: Math.max(-bounds.x, Math.min(bounds.x, prev.x)),
+          y: Math.max(-bounds.y, Math.min(bounds.y, prev.y)),
+        }));
+      };
+
+      window.addEventListener('resize', handleResize);
+      return () => window.removeEventListener('resize', handleResize);
+    }, [zoomLevel, calculateMaxPan]);
+
+    // Robust Fullscreen Switcher (Tries Browser HTML5 Fullscreen first, then In-App CSS Fullscreen)
+    const toggleFullscreen = useCallback(() => {
+      if (isInternalFullscreen) {
+        setIsInternalFullscreen(false);
+        return;
+      }
+
+      if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+          document.exitFullscreen().catch(() => {});
+        }
+        return;
+      }
+
+      const container = containerRef.current;
+      if (!container) {
+        setIsInternalFullscreen(true);
+        return;
+      }
+
+      const requestMethod =
+        container.requestFullscreen ||
+        (container as any).webkitRequestFullscreen ||
+        (container as any).mozRequestFullScreen ||
+        (container as any).msRequestFullscreen;
+
+      if (requestMethod) {
+        requestMethod
+          .call(container)
+          .then(() => {
+            onToggleFullscreen();
+          })
+          .catch((err: any) => {
+            console.warn('Native requestFullscreen denied or restricted, falling back to In-App Fullscreen:', err);
+            setIsInternalFullscreen(true);
+          });
+      } else {
+        setIsInternalFullscreen(true);
+      }
+    }, [isInternalFullscreen, onToggleFullscreen]);
+
+    // Escape key listener for internal fullscreen
+    useEffect(() => {
+      const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape' && isInternalFullscreen) {
+          setIsInternalFullscreen(false);
+        }
+      };
+      window.addEventListener('keydown', onKey);
+      return () => window.removeEventListener('keydown', onKey);
+    }, [isInternalFullscreen]);
+
+    // Prevent body scrolling when internal fullscreen is active
+    useEffect(() => {
+      if (isInternalFullscreen) {
+        const prevOverflow = document.body.style.overflow;
+        document.body.style.overflow = 'hidden';
+        return () => {
+          document.body.style.overflow = prevOverflow;
+        };
+      }
+    }, [isInternalFullscreen]);
+
+    // HLS Stream initialization
     const initHlsStream = useCallback(() => {
       const video = videoRef.current;
       if (!video) return;
@@ -184,9 +368,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
           const lvl = hls.levels[data.level];
           if (lvl) {
-            const bitrateStr = lvl.bitrate > 1000000
-              ? `${(lvl.bitrate / 1000000).toFixed(1)} Mbps`
-              : `${Math.round(lvl.bitrate / 1000)} kbps`;
+            const bitrateStr =
+              lvl.bitrate > 1000000
+                ? `${(lvl.bitrate / 1000000).toFixed(1)} Mbps`
+                : `${Math.round(lvl.bitrate / 1000)} kbps`;
             setCurrentBitrate(bitrateStr);
             setStats((prev) => ({
               ...prev,
@@ -201,7 +386,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             switch (data.type) {
               case Hls.ErrorTypes.NETWORK_ERROR:
                 setHasError(true);
-                setErrorMessage('Živý přenos v tomto sále právě nevysílá (mimo jednací dobu nebo přestávka).');
+                setErrorMessage(
+                  'Živý přenos v tomto sále právě nevysílá (mimo jednací dobu nebo přestávka).'
+                );
                 setIsLoading(false);
                 break;
               case Hls.ErrorTypes.MEDIA_ERROR:
@@ -252,6 +439,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       play: () => videoRef.current?.play(),
       pause: () => videoRef.current?.pause(),
       reload: () => initHlsStream(),
+      toggleFullscreen: () => toggleFullscreen(),
     }));
 
     const hideControls = useCallback(() => {
@@ -362,66 +550,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       };
     }, [stream.isLive, onTimeUpdate]);
 
-    // Pan boundary calculations
-    const updatePan = useCallback(
-      (newPan: PanOffset, zoom: number) => {
-        if (!containerRef.current) return;
-        const rect = containerRef.current.getBoundingClientRect();
-        const maxPanX = ((rect.width * zoom - rect.width) / 2) / zoom;
-        const maxPanY = ((rect.height * zoom - rect.height) / 2) / zoom;
-
-        const clampedX = Math.max(-maxPanX, Math.min(maxPanX, newPan.x));
-        const clampedY = Math.max(-maxPanY, Math.min(maxPanY, newPan.y));
-
-        setPan({ x: clampedX, y: clampedY });
-        setStats((prev) => ({
-          ...prev,
-          zoomLevel: zoom,
-          panX: clampedX,
-          panY: clampedY,
-        }));
-      },
-      []
-    );
-
-    useEffect(() => {
-      if (zoomLevel <= 1.02) {
-        setPan({ x: 0, y: 0 });
-        setStats((prev) => ({ ...prev, zoomLevel: 1.0, panX: 0, panY: 0 }));
-      } else {
-        updatePan(pan, zoomLevel);
-      }
-    }, [zoomLevel, updatePan]);
-
-    const handlePanStart = (clientX: number, clientY: number) => {
-      if (zoomLevel <= 1.02) return;
-      setIsPanning(true);
-      panStartRef.current = {
-        x: clientX - pan.x * zoomLevel,
-        y: clientY - pan.y * zoomLevel,
-      };
-    };
-
-    const handlePanMove = (clientX: number, clientY: number) => {
-      if (!isPanning || zoomLevel <= 1.02) return;
-      const newPan = {
-        x: (clientX - panStartRef.current.x) / zoomLevel,
-        y: (clientY - panStartRef.current.y) / zoomLevel,
-      };
-      updatePan(newPan, zoomLevel);
-    };
-
-    const handlePanEnd = () => setIsPanning(false);
-
-    const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
-      e.preventDefault();
-      const delta = -e.deltaY * 0.003;
-      const newZoom = Math.max(1.0, Math.min(8.0, Number((zoomLevel + delta).toFixed(2))));
-      onZoomChange(newZoom);
-      triggerHud(`ZOOM ${newZoom.toFixed(1)}x`);
-    };
-
-    const togglePlay = () => {
+    const togglePlay = useCallback(() => {
       initAudioBoost();
       const video = videoRef.current;
       if (!video) return;
@@ -435,6 +564,204 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         setIsPlaying(false);
         triggerHud('POZASTAVENO');
       }
+    }, [initAudioBoost, triggerHud]);
+
+    // ==========================================
+    // TOUCH GESTURES: Pinch-to-zoom & Touch Panning
+    // Using non-passive event listeners to ensure smooth multi-touch preventDefault()
+    // ==========================================
+    useEffect(() => {
+      const container = containerRef.current;
+      if (!container) return;
+
+      const handleTouchStart = (e: TouchEvent) => {
+        showControls();
+        const state = touchStateRef.current;
+
+        if (e.touches.length === 2) {
+          // TWO-FINGER PINCH-TO-ZOOM INITIATION
+          e.preventDefault();
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const dist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          const midX = (t1.clientX + t2.clientX) / 2;
+          const midY = (t1.clientY + t2.clientY) / 2;
+
+          state.mode = 'pinch';
+          state.initialPinchDist = dist;
+          state.initialPinchZoom = zoomLevel;
+          state.initialMidX = midX;
+          state.initialMidY = midY;
+          state.startPanX = pan.x;
+          state.startPanY = pan.y;
+          state.hasMoved = true;
+          setIsPanning(true);
+        } else if (e.touches.length === 1) {
+          // SINGLE-FINGER TOUCH INITIATION
+          const t = e.touches[0];
+          state.mode = 'pan';
+          state.startX = t.clientX;
+          state.startY = t.clientY;
+          state.startPanX = pan.x;
+          state.startPanY = pan.y;
+          state.hasMoved = false;
+          state.startTime = Date.now();
+        }
+      };
+
+      const handleTouchMove = (e: TouchEvent) => {
+        const state = touchStateRef.current;
+
+        if (state.mode === 'pinch' && e.touches.length === 2) {
+          // TWO-FINGER PINCH UPDATE
+          e.preventDefault();
+          const t1 = e.touches[0];
+          const t2 = e.touches[1];
+          const currentDist = Math.hypot(t2.clientX - t1.clientX, t2.clientY - t1.clientY);
+          const midX = (t1.clientX + t2.clientX) / 2;
+          const midY = (t1.clientY + t2.clientY) / 2;
+
+          if (state.initialPinchDist > 0) {
+            const scale = currentDist / state.initialPinchDist;
+            const newZoom = Math.max(1.0, Math.min(8.0, Number((state.initialPinchZoom * scale).toFixed(2))));
+            onZoomChange(newZoom);
+
+            // Shift pan along with two-finger midpoint movement
+            const deltaMidX = midX - state.initialMidX;
+            const deltaMidY = midY - state.initialMidY;
+            updatePan({ x: state.startPanX + deltaMidX, y: state.startPanY + deltaMidY }, newZoom);
+
+            triggerHud(`ZOOM ${newZoom.toFixed(1)}x`);
+          }
+        } else if (state.mode === 'pan' && e.touches.length === 1) {
+          // SINGLE-FINGER PAN UPDATE
+          const t = e.touches[0];
+          const dx = t.clientX - state.startX;
+          const dy = t.clientY - state.startY;
+
+          if (Math.hypot(dx, dy) > 8) {
+            state.hasMoved = true;
+            if (zoomLevel > 1.01) {
+              e.preventDefault(); // Stop page scrolling only when video is zoomed
+              setIsPanning(true);
+              updatePan({ x: state.startPanX + dx, y: state.startPanY + dy }, zoomLevel);
+            }
+          }
+        }
+      };
+
+      const handleTouchEnd = (e: TouchEvent) => {
+        const state = touchStateRef.current;
+
+        if (state.mode === 'pinch' && e.touches.length < 2) {
+          state.mode = 'none';
+          setIsPanning(false);
+        } else if (state.mode === 'pan') {
+          setIsPanning(false);
+          const duration = Date.now() - state.startTime;
+
+          // Detect Tap (clean touch without moving)
+          if (!state.hasMoved && duration < 320) {
+            const now = Date.now();
+            const timeSinceLastTap = now - state.lastTapTime;
+            const distFromLastTap = Math.hypot(state.startX - state.lastTapX, state.startY - state.lastTapY);
+
+            if (timeSinceLastTap < 300 && distFromLastTap < 35) {
+              // DOUBLE TAP: Toggle between 1.0x and 2.5x
+              if (zoomLevel > 1.05) {
+                onResetZoom();
+                triggerHud('ZOOM 1.0x (Celý sál)');
+              } else {
+                onZoomChange(2.5);
+                triggerHud('ZOOM 2.5x');
+              }
+              state.lastTapTime = 0;
+            } else {
+              // SINGLE TAP: Toggle play / controls
+              state.lastTapTime = now;
+              state.lastTapX = state.startX;
+              state.lastTapY = state.startY;
+              togglePlay();
+            }
+          }
+
+          state.mode = 'none';
+        }
+      };
+
+      const handleTouchCancel = () => {
+        touchStateRef.current.mode = 'none';
+        setIsPanning(false);
+      };
+
+      container.addEventListener('touchstart', handleTouchStart, { passive: false });
+      container.addEventListener('touchmove', handleTouchMove, { passive: false });
+      container.addEventListener('touchend', handleTouchEnd, { passive: true });
+      container.addEventListener('touchcancel', handleTouchCancel, { passive: true });
+
+      return () => {
+        container.removeEventListener('touchstart', handleTouchStart);
+        container.removeEventListener('touchmove', handleTouchMove);
+        container.removeEventListener('touchend', handleTouchEnd);
+        container.removeEventListener('touchcancel', handleTouchCancel);
+      };
+    }, [zoomLevel, pan, onZoomChange, onResetZoom, updatePan, togglePlay, showControls, triggerHud]);
+
+    // ==========================================
+    // MOUSE DRAG & CLICK HANDLING
+    // Prevents accidental play/pause toggle when panning with mouse
+    // ==========================================
+    const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (e.button !== 0) return; // Left click only
+      showControls();
+
+      mouseDragRef.current = {
+        isDown: true,
+        startX: e.clientX,
+        startY: e.clientY,
+        startPanX: pan.x,
+        startPanY: pan.y,
+        hasMoved: false,
+        startTime: Date.now(),
+      };
+    };
+
+    const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+      showControls();
+      const drag = mouseDragRef.current;
+      if (!drag.isDown) return;
+
+      const dx = e.clientX - drag.startX;
+      const dy = e.clientY - drag.startY;
+
+      if (Math.hypot(dx, dy) > 5) {
+        drag.hasMoved = true;
+        if (zoomLevel > 1.01) {
+          setIsPanning(true);
+          updatePan({ x: drag.startPanX + dx, y: drag.startPanY + dy }, zoomLevel);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      const drag = mouseDragRef.current;
+      if (!drag.isDown) return;
+
+      setIsPanning(false);
+      drag.isDown = false;
+
+      // Only toggle play if user didn't pan the video
+      if (!drag.hasMoved && Date.now() - drag.startTime < 350) {
+        togglePlay();
+      }
+    };
+
+    const handleWheel = (e: React.WheelEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      const delta = -e.deltaY * 0.003;
+      const newZoom = Math.max(1.0, Math.min(8.0, Number((zoomLevel + delta).toFixed(2))));
+      onZoomChange(newZoom);
+      triggerHud(`ZOOM ${newZoom.toFixed(1)}x`);
     };
 
     const skipTime = useCallback((seconds: number) => {
@@ -442,7 +769,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       if (!video) return;
       video.currentTime = Math.max(0, Math.min(video.duration || 999999, video.currentTime + seconds));
       triggerHud(seconds > 0 ? `+${seconds} s` : `${seconds} s`);
-    }, []);
+    }, [triggerHud]);
 
     const handleSyncToLive = () => {
       const video = videoRef.current;
@@ -561,7 +888,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             break;
           case 'f':
             e.preventDefault();
-            onToggleFullscreen();
+            toggleFullscreen();
             break;
           case 't':
             e.preventDefault();
@@ -616,7 +943,17 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
       window.addEventListener('keydown', handleKeyDown);
       return () => window.removeEventListener('keydown', handleKeyDown);
-    }, [volume, zoomLevel, isFullscreen, onToggleFullscreen, onToggleTheaterMode, onZoomChange, onResetZoom, skipTime]);
+    }, [
+      volume,
+      zoomLevel,
+      toggleFullscreen,
+      onToggleTheaterMode,
+      onZoomChange,
+      onResetZoom,
+      skipTime,
+      togglePlay,
+      triggerHud,
+    ]);
 
     const playedPercent = duration > 0 ? (currentTime / duration) * 100 : 0;
     const bufferedPercent = duration > 0 ? (bufferedEnd / duration) * 100 : 0;
@@ -627,20 +964,26 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
       ? 'cursor-grab'
       : 'cursor-pointer';
 
+    const effectiveFullscreen = isFullscreen || isInternalFullscreen;
+
     return (
       <div className="relative w-full flex items-center justify-center">
         <div
           ref={containerRef}
-          onMouseMove={() => showControls()}
+          onMouseMove={handleMouseMove}
+          onMouseDown={handleMouseDown}
+          onMouseUp={handleMouseUp}
           onMouseLeave={() => {
-            handlePanEnd();
+            mouseDragRef.current.isDown = false;
+            setIsPanning(false);
             hideControls();
           }}
-          onMouseDown={(e) => handlePanStart(e.clientX, e.clientY)}
-          onMouseMoveCapture={(e) => handlePanMove(e.clientX, e.clientY)}
-          onMouseUp={handlePanEnd}
           onWheel={handleWheel}
-          className={`relative w-full aspect-video bg-[#030712] rounded-2xl overflow-hidden shadow-2xl border border-slate-800 select-none group touch-none ${cursorStyle}`}
+          className={`relative w-full aspect-video bg-[#030712] rounded-2xl overflow-hidden shadow-2xl border border-slate-800 select-none group touch-none ${cursorStyle} ${
+            effectiveFullscreen
+              ? '!fixed !inset-0 !z-[99999] !w-screen !h-screen !max-w-none !rounded-none !border-none !aspect-auto'
+              : ''
+          }`}
         >
           {/* Main Video Viewport */}
           <video
@@ -649,21 +992,39 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
             crossOrigin="anonymous"
             className="w-full h-full object-cover transition-transform duration-75"
             style={{
-              transform: `scale(${zoomLevel}) translate(${pan.x}px, ${pan.y}px)`,
+              transform: `translate3d(${pan.x}px, ${pan.y}px, 0px) scale(${zoomLevel})`,
               transformOrigin: '50% 50%',
             }}
           />
 
-          {/* Click to play/pause */}
-          <div
-            className="absolute inset-0 z-10"
-            onClick={togglePlay}
-          />
+          {/* Floating Exit Button for Fullscreen */}
+          {effectiveFullscreen && (
+            <button
+              onClick={toggleFullscreen}
+              className={`absolute top-4 right-4 z-40 flex items-center gap-2 px-3.5 py-1.5 rounded-xl bg-slate-950/90 hover:bg-sky-600 text-white border border-slate-700/80 shadow-2xl transition-all font-mono text-xs font-semibold backdrop-blur-md ${
+                controlsVisible ? 'opacity-100' : 'opacity-0'
+              }`}
+              title="Ukončit celou obrazovku (Esc / F)"
+            >
+              <Minimize className="w-4 h-4" />
+              <span className="hidden sm:inline">Ukončit celou obrazovku</span>
+            </button>
+          )}
+
+          {/* Zoom Instruction Hint for First Zoom */}
+          {zoomLevel > 1.05 && controlsVisible && (
+            <div className="absolute top-3 inset-x-0 flex justify-center pointer-events-none z-20">
+              <div className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-slate-900/80 backdrop-blur-md border border-slate-700/60 text-slate-300 text-[11px] font-medium shadow-lg animate-in fade-in duration-200">
+                <Move className="w-3 h-3 text-sky-400" />
+                <span>Posunujte tažením prstu nebo myši • Zoom 2 prsty</span>
+              </div>
+            </div>
+          )}
 
           {/* On-screen HUD readout */}
           {hudNotice && (
-            <div className="absolute top-4 inset-x-0 flex justify-center pointer-events-none z-30">
-              <div className="px-4 py-1.5 rounded-xl bg-slate-950/90 backdrop-blur-md border border-slate-700 text-sky-300 font-mono text-xs font-bold tracking-wider shadow-2xl">
+            <div className="absolute top-12 inset-x-0 flex justify-center pointer-events-none z-30">
+              <div className="px-4 py-1.5 rounded-xl bg-slate-950/90 backdrop-blur-md border border-slate-700 text-sky-300 font-mono text-xs font-bold tracking-wider shadow-2xl animate-in zoom-in-95 duration-100">
                 {hudNotice}
               </div>
             </div>
@@ -673,6 +1034,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           <ZoomRadar
             zoomLevel={zoomLevel}
             pan={pan}
+            maxPan={maxPan}
             onPanChange={(newPan) => updatePan(newPan, zoomLevel)}
             onResetZoom={onResetZoom}
           />
@@ -755,7 +1117,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
           {/* Bottom Player Controls Bar */}
           <div
-            className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950 via-slate-950/80 to-transparent pt-12 pb-3.5 px-4 md:px-5 transition-opacity duration-200 z-30 ${
+            className={`absolute bottom-0 inset-x-0 bg-gradient-to-t from-slate-950 via-slate-950/85 to-transparent pt-12 pb-3.5 px-4 md:px-5 transition-opacity duration-200 z-30 ${
               controlsVisible ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'
             }`}
             onClick={(e) => e.stopPropagation()}
@@ -852,7 +1214,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   />
 
                   {audioBoost > 1.05 && (
-                    <span className="text-[10px] font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-800/80 px-1.5 py-0.5 rounded ml-1" title="Zesílení zvuku pro tiché řečníky">
+                    <span
+                      className="text-[10px] font-mono font-bold text-amber-400 bg-amber-950/60 border border-amber-800/80 px-1.5 py-0.5 rounded ml-1"
+                      title="Zesílení zvuku pro tiché řečníky"
+                    >
                       +{Math.round((audioBoost - 1) * 100)}%
                     </span>
                   )}
@@ -938,11 +1303,11 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
 
                 {/* Fullscreen */}
                 <button
-                  onClick={onToggleFullscreen}
+                  onClick={toggleFullscreen}
                   className="p-2 text-slate-300 hover:text-white hover:bg-slate-800 rounded-xl transition-colors"
-                  title={isFullscreen ? 'Zmenšit okno (F)' : 'Celá obrazovka (F)'}
+                  title={effectiveFullscreen ? 'Zmenšit okno (F / Esc)' : 'Celá obrazovka (F)'}
                 >
-                  {isFullscreen ? (
+                  {effectiveFullscreen ? (
                     <Minimize className="w-4 h-4" />
                   ) : (
                     <Maximize className="w-4 h-4" />

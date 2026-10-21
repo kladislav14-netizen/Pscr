@@ -6,7 +6,7 @@ import ChannelSwitcher from './components/ChannelSwitcher';
 import CustomStreamModal from './components/CustomStreamModal';
 import ShortcutsModal from './components/ShortcutsModal';
 import { OFFICIAL_STREAMS } from './data/parliamentData';
-import { StreamItem } from '../types/player';
+import { StreamItem } from './types/player';
 import { 
   Building2, 
   Share2, 
@@ -53,7 +53,11 @@ export const App: React.FC = () => {
       setIsFullscreen(Boolean(document.fullscreenElement));
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
-    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
   }, []);
 
   const handleZoomChange = useCallback((newZoom: number) => {
@@ -65,13 +69,27 @@ export const App: React.FC = () => {
   }, []);
 
   const handleToggleFullscreen = useCallback(() => {
+    if (playerRef.current) {
+      playerRef.current.toggleFullscreen();
+      return;
+    }
+
     if (!document.fullscreenElement) {
-      appContainerRef.current?.requestFullscreen().catch((err) => {
-        console.error('Fullscreen request failed:', err);
-      });
+      const elem = appContainerRef.current || document.documentElement;
+      const requestMethod =
+        elem.requestFullscreen ||
+        (elem as any).webkitRequestFullscreen ||
+        (elem as any).mozRequestFullScreen ||
+        (elem as any).msRequestFullscreen;
+
+      if (requestMethod) {
+        requestMethod.call(elem).catch((err: any) => {
+          console.warn('Fullscreen request failed:', err);
+        });
+      }
     } else {
       if (document.exitFullscreen) {
-        document.exitFullscreen();
+        document.exitFullscreen().catch(() => {});
       }
     }
   }, []);
