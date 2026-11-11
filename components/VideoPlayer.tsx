@@ -321,7 +321,9 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
     }, [isInternalFullscreen]);
 
     // HLS Stream initialization
-    const initHlsStream = useCallback(() => {
+    const [isPlayingFallbackDemo, setIsPlayingFallbackDemo] = useState(false);
+
+    const initHlsStream = useCallback((forceDemo = false) => {
       const video = videoRef.current;
       if (!video) return;
 
@@ -336,7 +338,10 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         hlsRef.current = null;
       }
 
-      const isHls = stream.url.includes('.m3u8');
+      const activeUrl = forceDemo && stream.fallbackDemoUrl ? stream.fallbackDemoUrl : stream.url;
+      setIsPlayingFallbackDemo(forceDemo && Boolean(stream.fallbackDemoUrl));
+
+      const isHls = activeUrl.includes('.m3u8');
 
       if (isHls && Hls.isSupported()) {
         const hls = new Hls({
@@ -346,7 +351,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
         });
         hlsRef.current = hls;
 
-        hls.loadSource(stream.url);
+        hls.loadSource(activeUrl);
         hls.attachMedia(video);
 
         hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => {
@@ -404,7 +409,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           }
         });
       } else {
-        video.src = stream.url;
+        video.src = activeUrl;
         video.load();
 
         const handleCanPlay = () => {
@@ -427,7 +432,7 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
           video.removeEventListener('error', handleError);
         };
       }
-    }, [stream.url]);
+    }, [stream.url, stream.fallbackDemoUrl]);
 
     useImperativeHandle(ref, () => ({
       seekTo: (time: number) => {
@@ -1073,23 +1078,34 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                 </p>
               </div>
 
-              <div className="flex flex-wrap items-center justify-center gap-3 pt-2">
+              <div className="flex flex-wrap items-center justify-center gap-2.5 pt-2">
                 <button
-                  onClick={() => initHlsStream()}
-                  className="flex items-center gap-2 px-4 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-sky-600/30 transition-all active:scale-95"
+                  onClick={() => initHlsStream(false)}
+                  className="flex items-center gap-2 px-3.5 py-2 bg-sky-600 hover:bg-sky-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-sky-600/30 transition-all active:scale-95"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
                   <span>Zkusit znovu připojit</span>
                 </button>
 
+                {stream.fallbackDemoUrl && (
+                  <button
+                    onClick={() => initHlsStream(true)}
+                    className="flex items-center gap-2 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-semibold shadow-lg shadow-indigo-600/30 transition-all active:scale-95"
+                    title="Přehrát záznam z archivu sněmovny pro otestování zoomu a všech funkcí"
+                  >
+                    <Play className="w-3.5 h-3.5 fill-white" />
+                    <span>Spustit testovací záznam</span>
+                  </button>
+                )}
+
                 <a
                   href="https://www.psp.cz/sqw/hp.sqw?k=203"
                   target="_blank"
                   rel="noreferrer"
-                  className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
+                  className="flex items-center gap-1.5 px-3.5 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white rounded-xl text-xs font-semibold border border-slate-700 transition-colors"
                 >
                   <Tv className="w-3.5 h-3.5 text-sky-400" />
-                  <span>Harmonogram schůzí (psp.cz)</span>
+                  <span>Harmonogram schůzí</span>
                   <ExternalLink className="w-3 h-3 text-slate-400" />
                 </a>
               </div>
@@ -1223,19 +1239,30 @@ export const VideoPlayer = forwardRef<VideoPlayerRef, VideoPlayerProps>(
                   )}
                 </div>
 
-                {/* Live Tally Button */}
-                <button
-                  onClick={handleSyncToLive}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold tracking-wider transition-all border ${
-                    isLiveSynced
-                      ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-sm'
-                      : 'bg-slate-800 hover:bg-emerald-600/30 text-slate-400 hover:text-emerald-300 border-slate-700'
-                  }`}
-                  title="Kliknutím skočíte na živé vysílání"
-                >
-                  <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
-                  <span>PŘÍMÝ PŘENOS</span>
-                </button>
+                {/* Live / Demo Tally Button */}
+                {isPlayingFallbackDemo ? (
+                  <button
+                    onClick={() => initHlsStream(false)}
+                    className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold tracking-wider transition-all border bg-indigo-500/20 text-indigo-300 border-indigo-500/50 shadow-sm"
+                    title="Běží testovací záznam ze sněmovny. Kliknutím přepnete zpět na živé vysílání."
+                  >
+                    <span className="w-2 h-2 rounded-full bg-indigo-400"></span>
+                    <span>TEST ZÁZNAM</span>
+                  </button>
+                ) : (
+                  <button
+                    onClick={handleSyncToLive}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-mono text-[11px] font-bold tracking-wider transition-all border ${
+                      isLiveSynced
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/50 shadow-sm'
+                        : 'bg-slate-800 hover:bg-emerald-600/30 text-slate-400 hover:text-emerald-300 border-slate-700'
+                    }`}
+                    title="Kliknutím skočíte na živé vysílání"
+                  >
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+                    <span>PŘÍMÝ PŘENOS</span>
+                  </button>
+                )}
               </div>
 
               {/* Right group */}

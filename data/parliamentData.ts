@@ -12,6 +12,7 @@ export const OFFICIAL_STREAMS: StreamItem[] = [
     isLive: true,
     roomName: 'Sněmovní 4, Hlavní zasedací sál',
     description: 'Přímý přenos z plenárního zasedání Poslanecké sněmovny Parlamentu ČR. Projednávání návrhů zákonů, interpelace a hlasování.',
+    fallbackDemoUrl: 'https://videoarchiv.psp.cz/stream/upload/5000_video-psp-202624-2034-38-Atrium.mp4.mp4',
   },
   {
     id: 'ps-stream2',
@@ -24,6 +25,7 @@ export const OFFICIAL_STREAMS: StreamItem[] = [
     isLive: true,
     roomName: 'Tiskové centrum PSP ČR',
     description: 'Přenosy tiskových konferencí poslaneckých klubů, vedení Poslanecké sněmovny a vládních i opozičních představitelů.',
+    fallbackDemoUrl: 'https://videoarchiv.psp.cz/stream/upload/5000_video-psp-202624-2034-38-Atrium.mp4.mp4',
   },
   {
     id: 'ps-stream3',
@@ -36,6 +38,7 @@ export const OFFICIAL_STREAMS: StreamItem[] = [
     isLive: true,
     roomName: 'Jednací místnost výborů č. 1',
     description: 'Jednání garančních výborů, podvýborů a vyšetřovacích komisí Poslanecké sněmovny.',
+    fallbackDemoUrl: 'https://videoarchiv.psp.cz/stream/upload/5000_video-psp-202624-2034-38-Atrium.mp4.mp4',
   },
   {
     id: 'ps-stream4',
@@ -48,6 +51,7 @@ export const OFFICIAL_STREAMS: StreamItem[] = [
     isLive: true,
     roomName: 'Konferenční sál č. 2',
     description: 'Odborné semináře, kulaté stoly a veřejná slyšení pořádaná výbory Poslanecké sněmovny.',
+    fallbackDemoUrl: 'https://videoarchiv.psp.cz/stream/upload/5000_video-psp-202624-2034-38-Atrium.mp4.mp4',
   },
   {
     id: 'ps-stream5',
@@ -60,5 +64,6 @@ export const OFFICIAL_STREAMS: StreamItem[] = [
     isLive: true,
     roomName: 'Záložní režie ČRa',
     description: 'Záložní a testovací vysílací kanál Českých Radiokomunikací pro souběžná jednání.',
+    fallbackDemoUrl: 'https://videoarchiv.psp.cz/stream/upload/5000_video-psp-202624-2034-38-Atrium.mp4.mp4',
   },
 ];

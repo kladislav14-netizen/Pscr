@@ -11,6 +11,7 @@ export interface StreamItem {
   isLive: boolean;
   description: string;
   roomName: string;
+  fallbackDemoUrl?: string;
   subtitlesUrl?: string;
   date?: string;
   duration?: string;
